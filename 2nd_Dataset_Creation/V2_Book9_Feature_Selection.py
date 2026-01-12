@@ -951,17 +951,17 @@ else:
     elapsed = time.time() - start
     print(f"✓ Model trained in {elapsed:.1f}s (best iteration: {baseline_model.best_iteration})")
 
-    # Evaluate on all splits
+    # Evaluate on train/val only (test is held out until final evaluation)
     print("\nBaseline performance:")
     baseline_metrics = {
         'train': evaluate_model(baseline_model, X_train, y_train, feature_cols, "Train"),
-        'val': evaluate_model(baseline_model, X_val, y_val, feature_cols, "Val"),
-        'test': evaluate_model(baseline_model, X_test, y_test, feature_cols, "Test")
+        'val': evaluate_model(baseline_model, X_val, y_val, feature_cols, "Val")
     }
 
     # Calculate train-val gap
     baseline_metrics['train_val_gap'] = baseline_metrics['train']['auprc'] - baseline_metrics['val']['auprc']
     print(f"  Train-Val Gap: {baseline_metrics['train_val_gap']:.4f}")
+    print("  (Test set held out - evaluated only at final model)")
 
     # Save checkpoint
     save_checkpoint("step1_4_baseline_model", {
@@ -977,7 +977,6 @@ else:
         'n_removed': 0,
         'train_auprc': baseline_metrics['train']['auprc'],
         'val_auprc': baseline_metrics['val']['auprc'],
-        'test_auprc': baseline_metrics['test']['auprc'],
         'train_val_gap': baseline_metrics['train_val_gap'],
         'val_drop_from_baseline': 0.0,
         'timestamp': datetime.now().isoformat()
@@ -1189,12 +1188,11 @@ else:
         selected_features, scale_pos_weight
     )
 
-    # Evaluate
+    # Evaluate on train/val only (test is held out until final evaluation)
     print("\nPhase 1 reduced model performance:")
     phase1_metrics = {
         'train': evaluate_model(phase1_model, X_train, y_train, selected_features, "Train"),
-        'val': evaluate_model(phase1_model, X_val, y_val, selected_features, "Val"),
-        'test': evaluate_model(phase1_model, X_test, y_test, selected_features, "Test")
+        'val': evaluate_model(phase1_model, X_val, y_val, selected_features, "Val")
     }
 
     phase1_metrics['train_val_gap'] = phase1_metrics['train']['auprc'] - phase1_metrics['val']['auprc']
@@ -1238,7 +1236,6 @@ else:
         'n_removed': len(feature_cols) - len(phase1_features),
         'train_auprc': phase1_metrics['train']['auprc'],
         'val_auprc': phase1_metrics['val']['auprc'],
-        'test_auprc': phase1_metrics['test']['auprc'],
         'train_val_gap': phase1_metrics['train_val_gap'],
         'val_drop_from_baseline': val_drop,
         'timestamp': datetime.now().isoformat()
@@ -1350,8 +1347,7 @@ while stop_reason is None:
 
         iter_metrics = {
             'train': evaluate_model(iter_model, X_train, y_train, current_features, "Train"),
-            'val': evaluate_model(iter_model, X_val, y_val, current_features, "Val"),
-            'test': evaluate_model(iter_model, X_test, y_test, current_features, "Test")
+            'val': evaluate_model(iter_model, X_val, y_val, current_features, "Val")
         }
         iter_metrics['train_val_gap'] = iter_metrics['train']['auprc'] - iter_metrics['val']['auprc']
 
@@ -1460,7 +1456,6 @@ while stop_reason is None:
         'n_removed': len(features_to_remove) if stop_reason is None else 0,
         'train_auprc': iter_metrics['train']['auprc'],
         'val_auprc': iter_metrics['val']['auprc'],
-        'test_auprc': iter_metrics['test']['auprc'],
         'train_val_gap': iter_metrics['train_val_gap'],
         'val_drop_from_baseline': val_drop,
         'gap_increase': gap_increase,
@@ -1542,22 +1537,29 @@ final_model = train_xgboost_model(
     final_features, scale_pos_weight
 )
 
-print("\nFinal model metrics:")
+print("\nFinal model metrics (train/val):")
 final_metrics = {
     'train': evaluate_model(final_model, X_train, y_train, final_features, "Train"),
-    'val': evaluate_model(final_model, X_val, y_val, final_features, "Val"),
-    'test': evaluate_model(final_model, X_test, y_test, final_features, "Test")
+    'val': evaluate_model(final_model, X_val, y_val, final_features, "Val")
 }
 
+# TEST SET EVALUATION - First and only evaluation on held-out test set
+print("\n" + "="*70)
+print("TEST SET EVALUATION (First and Only)")
+print("="*70)
+print("This is the first time the test set has been evaluated.")
+print("All feature selection decisions were made using validation data only.")
+final_metrics['test'] = evaluate_model(final_model, X_test, y_test, final_features, "Test")
+
 print("\n" + "-"*70)
-print("COMPARISON: BASELINE vs FINAL")
+print("COMPARISON: BASELINE vs FINAL (Validation)")
 print("-"*70)
 print(f"{'Metric':<20} {'Baseline':>12} {'Final':>12} {'Change':>12}")
 print("-"*56)
 print(f"{'Features':<20} {len(feature_cols):>12} {len(final_features):>12} {len(final_features) - len(feature_cols):>+12}")
 print(f"{'Val AUPRC':<20} {baseline_metrics['val']['auprc']:>12.4f} {final_metrics['val']['auprc']:>12.4f} {final_metrics['val']['auprc'] - baseline_metrics['val']['auprc']:>+12.4f}")
-print(f"{'Test AUPRC':<20} {baseline_metrics['test']['auprc']:>12.4f} {final_metrics['test']['auprc']:>12.4f} {final_metrics['test']['auprc'] - baseline_metrics['test']['auprc']:>+12.4f}")
 print(f"{'Train-Val Gap':<20} {baseline_metrics['train_val_gap']:>12.4f} {final_metrics['train']['auprc'] - final_metrics['val']['auprc']:>12.4f}")
+print(f"\n{'Test AUPRC (held out)':<20} {final_metrics['test']['auprc']:>12.4f}")
 
 # COMMAND ----------
 
@@ -1607,8 +1609,7 @@ summary = {
     'stop_reason': stop_reason,
     'baseline_val_auprc': baseline_metrics['val']['auprc'],
     'final_val_auprc': final_metrics['val']['auprc'],
-    'baseline_test_auprc': baseline_metrics['test']['auprc'],
-    'final_test_auprc': final_metrics['test']['auprc'],
+    'final_test_auprc': final_metrics['test']['auprc'],  # Test evaluated only at final model
     'feature_list': final_features
 }
 
@@ -1639,13 +1640,13 @@ if os.path.exists(tracking_path):
     axes[0, 0].set_title('Feature Count Over Iterations')
     axes[0, 0].grid(alpha=0.3)
 
-    # Validation AUPRC
+    # Validation AUPRC (test held out until final evaluation)
     axes[0, 1].plot(range(len(tracking_df)), tracking_df['val_auprc'], 'go-', linewidth=2, markersize=8, label='Val')
-    axes[0, 1].plot(range(len(tracking_df)), tracking_df['test_auprc'], 'ro-', linewidth=2, markersize=8, label='Test')
+    axes[0, 1].plot(range(len(tracking_df)), tracking_df['train_auprc'], 'bo-', linewidth=2, markersize=8, label='Train', alpha=0.5)
     axes[0, 1].axhline(y=baseline_metrics['val']['auprc'] * (1 - MAX_VAL_AUPRC_DROP), color='g', linestyle='--', alpha=0.5, label='5% drop threshold')
     axes[0, 1].set_xlabel('Step')
     axes[0, 1].set_ylabel('AUPRC')
-    axes[0, 1].set_title('AUPRC Over Iterations')
+    axes[0, 1].set_title('AUPRC Over Iterations (Test Held Out)')
     axes[0, 1].legend()
     axes[0, 1].grid(alpha=0.3)
 
