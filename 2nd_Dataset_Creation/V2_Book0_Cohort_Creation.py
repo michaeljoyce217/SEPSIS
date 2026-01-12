@@ -3052,11 +3052,18 @@ profile.show(200, truncate=False)
 # MAGIC This section adds a `SPLIT` column to the final cohort table using a hybrid temporal + patient-level stratified split strategy:
 # MAGIC
 # MAGIC - **TEST**: Q6 (most recent quarter) - temporal holdout to simulate deployment
-# MAGIC - **TRAIN/VAL**: Q0-Q5 patients split using StratifiedGroupKFold (70/30) to ensure:
+# MAGIC - **TRAIN/VAL**: Q0-Q5 patients split using StratifiedGroupKFold (70/30) with **multi-class stratification by cancer type** to ensure:
 # MAGIC   - No patient appears in both train and validation
-# MAGIC   - Class balance (FUTURE_CRC_EVENT) preserved in both splits
+# MAGIC   - **Cancer type distribution** (C18/C19/C20) preserved across splits
+# MAGIC   - Rare subtypes (especially C19 rectosigmoid) proportionally represented in both sets
 # MAGIC
-# MAGIC This prevents data leakage in downstream feature selection notebooks.
+# MAGIC **Stratification classes:**
+# MAGIC - 0 = Negative (no CRC diagnosis)
+# MAGIC - 1 = C18 (colon cancer)
+# MAGIC - 2 = C19 (rectosigmoid junction cancer)
+# MAGIC - 3 = C20 (rectal cancer)
+# MAGIC
+# MAGIC This prevents data leakage in downstream feature selection notebooks and ensures fair model evaluation across cancer subtypes.
 
 # COMMAND ----------
 
@@ -3114,26 +3121,39 @@ df_with_quarter.groupBy("quarters_since_study_start").agg(
 # MAGIC ### CELL SPLIT-2 - STRATIFIEDGROUPKFOLD FOR TRAIN/VAL SPLIT
 # MAGIC
 # MAGIC #### 🔍 What This Cell Does
-# MAGIC Uses sklearn's StratifiedGroupKFold to split Q0-Q5 patients into TRAIN (70%) and VAL (30%) sets. The split is stratified by FUTURE_CRC_EVENT and grouped by PAT_ID to ensure no patient appears in both sets.
+# MAGIC Uses sklearn's StratifiedGroupKFold to split Q0-Q5 patients into TRAIN (70%) and VAL (30%) sets. The split is stratified by **cancer type** (C18/C19/C20) and grouped by PAT_ID to ensure no patient appears in both sets.
+# MAGIC
+# MAGIC #### Why Multi-Class Stratification by Cancer Type
+# MAGIC We stratify by a 4-class variable (negative, C18, C19, C20) rather than binary (negative, positive) to ensure:
+# MAGIC - The **distribution of cancer types** (C18 colon ~74%, C19 rectosigmoid ~4%, C20 rectum ~16%) is preserved in both TRAIN and VAL splits
+# MAGIC - Model performance can be evaluated fairly across all cancer subtypes
+# MAGIC - Rare subtypes (C19) are not accidentally concentrated in one split
 # MAGIC
 # MAGIC #### Why This Matters for Data Leakage Prevention
 # MAGIC Patient-level splitting prevents information leakage where the model could learn patient-specific patterns from multiple observations of the same patient across train/val sets.
 # MAGIC
 # MAGIC #### What to Watch For
-# MAGIC Train should have ~70% of Q0-Q5 patients. Event rates should be similar across TRAIN and VAL.
+# MAGIC - Train should have ~70% of Q0-Q5 patients
+# MAGIC - Cancer type distribution (C18/C19/C20) should be similar across TRAIN and VAL
 # MAGIC
 # MAGIC #### Patient-Level Stratification Logic
 # MAGIC
 # MAGIC StratifiedGroupKFold stratifies by **patient-level** labels, not observation-level labels. A patient
-# MAGIC is labeled "positive" if ANY of their observations has FUTURE_CRC_EVENT=1.
+# MAGIC is assigned a stratification class based on their cancer type (or 0 if negative).
 # MAGIC
-# MAGIC **Example**: A patient with 12 monthly observations where only month 11 has FUTURE_CRC_EVENT=1:
-# MAGIC - Patient-level label: 1 (positive)
-# MAGIC - Observation-level: 11 negatives, 1 positive
+# MAGIC **Stratification classes:**
+# MAGIC - 0 = Negative (no CRC diagnosis)
+# MAGIC - 1 = C18 (colon cancer)
+# MAGIC - 2 = C19 (rectosigmoid junction cancer)
+# MAGIC - 3 = C20 (rectal cancer)
+# MAGIC
+# MAGIC **Example**: A patient diagnosed with C18 colon cancer:
+# MAGIC - Patient-level stratification label: 1 (C18)
+# MAGIC - Ensures this patient is grouped with other C18 patients during stratification
 # MAGIC
 # MAGIC **Why this is correct**:
 # MAGIC 1. The patient-level label ensures the entire patient goes to one split (no data leakage)
-# MAGIC 2. Stratification preserves the proportion of "ever-positive" patients across splits
+# MAGIC 2. Stratification preserves the proportion of each cancer subtype across splits
 # MAGIC 3. The model will see both the negative and positive observations during training, learning
 # MAGIC    the temporal progression toward CRC
 # MAGIC
@@ -3155,16 +3175,58 @@ df_trainval_pool = df_with_quarter.filter(F.col("quarters_since_study_start") < 
 print(f"TEST (Q6): {df_test.count():,} observations")
 print(f"TRAIN/VAL pool (Q0-Q5): {df_trainval_pool.count():,} observations")
 
-# For SGKF, we need patient-level labels
-# Get max label per patient (1 if ANY observation has FUTURE_CRC_EVENT=1, else 0)
-# Note: FUTURE_CRC_EVENT varies by observation date, so we use max to identify "ever positive" patients
+# =============================================================================
+# MULTI-CLASS STRATIFICATION BY CANCER TYPE
+# =============================================================================
+# We stratify by cancer type (C18/C19/C20) to preserve the distribution of
+# cancer subtypes across TRAIN and VAL splits. This ensures fair evaluation
+# across all cancer types and prevents rare subtypes from being concentrated
+# in one split.
+#
+# Stratification classes:
+#   0 = Negative (no CRC diagnosis)
+#   1 = C18 (colon cancer)
+#   2 = C19 (rectosigmoid junction cancer)
+#   3 = C20 (rectal cancer)
+# =============================================================================
+
+# For SGKF, we need patient-level labels WITH cancer type
+# Get the cancer type for positive patients (from ICD10_GROUP column)
 patient_labels = df_trainval_pool.groupBy("PAT_ID").agg(
-    F.max("FUTURE_CRC_EVENT").alias("label")
+    F.max("FUTURE_CRC_EVENT").alias("is_positive"),
+    # Get the cancer type for positive patients (first non-null ICD10_GROUP where event=1)
+    F.first(
+        F.when(F.col("FUTURE_CRC_EVENT") == 1, F.col("ICD10_GROUP"))
+    ).alias("cancer_type")
 ).toPandas()
 
+# Create multi-class stratification label
+# Map: 0=negative, 1=C18, 2=C19, 3=C20, (4=C21 if include_anus=True)
+cancer_type_map = {'C18': 1, 'C19': 2, 'C20': 3}
+if include_anus:
+    cancer_type_map['C21'] = 4
+
+def get_strat_label(row):
+    if row['is_positive'] == 0:
+        return 0  # Negative
+    else:
+        return cancer_type_map.get(row['cancer_type'], 0)  # Map cancer type or 0 if unknown
+
+patient_labels['strat_label'] = patient_labels.apply(get_strat_label, axis=1)
+
+# Summary statistics
 print(f"\nUnique patients in TRAIN/VAL pool: {len(patient_labels):,}")
-print(f"Positive patients: {patient_labels['label'].sum():,}")
-print(f"Negative patients: {(patient_labels['label'] == 0).sum():,}")
+print(f"Negative patients (class 0): {(patient_labels['strat_label'] == 0).sum():,}")
+print(f"C18 patients (class 1): {(patient_labels['strat_label'] == 1).sum():,}")
+print(f"C19 patients (class 2): {(patient_labels['strat_label'] == 2).sum():,}")
+print(f"C20 patients (class 3): {(patient_labels['strat_label'] == 3).sum():,}")
+if include_anus:
+    print(f"C21 patients (class 4): {(patient_labels['strat_label'] == 4).sum():,}")
+
+# Show cancer type distribution among positive patients
+positive_patients = patient_labels[patient_labels['is_positive'] == 1]
+print(f"\nCancer type distribution (positive patients only):")
+print(positive_patients['cancer_type'].value_counts(normalize=True).round(4) * 100)
 
 # COMMAND ----------
 
@@ -3174,27 +3236,25 @@ print(f"Negative patients: {(patient_labels['label'] == 0).sum():,}")
 
 # COMMAND ----------
 
-# CELL SPLIT-2b: Apply StratifiedGroupKFold
+# CELL SPLIT-2b: Apply StratifiedGroupKFold with multi-class stratification
 
 # Set up StratifiedGroupKFold
-# We use 10 folds and take first fold as validation (~10% per fold, take 3 folds for ~30%)
-# Or simpler: use 3 folds, take 1 for validation (33%) - close to 30%
-# Let's use a custom approach for precise 70/30
+# Using n_splits=3 gives us ~33% validation per fold (close to target 30%)
 
 np.random.seed(217)  # For reproducibility
 
 # Shuffle patients
 patient_labels_shuffled = patient_labels.sample(frac=1, random_state=217).reset_index(drop=True)
 
-# Use StratifiedGroupKFold with n_splits=10, take first 3 folds as validation (~30%)
-# Actually, for a single 70/30 split, let's use a cleaner approach:
-# StratifiedGroupKFold with n_splits=3 gives us ~33% validation per fold
-
+# =============================================================================
+# STRATIFY BY CANCER TYPE (multi-class) instead of binary positive/negative
+# This ensures C18/C19/C20 distribution is preserved across splits
+# =============================================================================
 sgkf = StratifiedGroupKFold(n_splits=3, shuffle=True, random_state=217)
 
 # Get train/val indices for first fold
 X_dummy = np.zeros(len(patient_labels_shuffled))  # Dummy X, not used
-y = patient_labels_shuffled['label'].values
+y = patient_labels_shuffled['strat_label'].values  # Multi-class: 0=neg, 1=C18, 2=C19, 3=C20
 groups = patient_labels_shuffled['PAT_ID'].values
 
 # Take the first fold
@@ -3211,19 +3271,66 @@ overlap = train_patients.intersection(val_patients)
 print(f"\nPatient overlap check: {len(overlap)} patients in both (should be 0)")
 assert len(overlap) == 0, "ERROR: Patients appear in both train and val!"
 
-# Check stratification
-train_event_rate = patient_labels_shuffled.iloc[train_idx]['label'].mean()
-val_event_rate = patient_labels_shuffled.iloc[val_idx]['label'].mean()
-print(f"\nEvent rate - TRAIN: {train_event_rate:.6f}")
-print(f"Event rate - VAL: {val_event_rate:.6f}")
+# Check overall positive rate (binary) is preserved
+train_positive_rate = patient_labels_shuffled.iloc[train_idx]['is_positive'].mean()
+val_positive_rate = patient_labels_shuffled.iloc[val_idx]['is_positive'].mean()
+print(f"\nPositive patient rate - TRAIN: {train_positive_rate:.6f}")
+print(f"Positive patient rate - VAL: {val_positive_rate:.6f}")
+
+# =============================================================================
+# VERIFY CANCER TYPE DISTRIBUTION IS PRESERVED ACROSS SPLITS
+# =============================================================================
+print("\n" + "="*70)
+print("CANCER TYPE DISTRIBUTION VERIFICATION")
+print("="*70)
+
+# Get positive patients in each split
+train_positive = patient_labels_shuffled.iloc[train_idx][patient_labels_shuffled.iloc[train_idx]['is_positive'] == 1]
+val_positive = patient_labels_shuffled.iloc[val_idx][patient_labels_shuffled.iloc[val_idx]['is_positive'] == 1]
+all_positive = patient_labels[patient_labels['is_positive'] == 1]
+
+# Calculate cancer type distribution for each split
+# Include C21 if include_anus=True
+cancer_types_to_check = ['C18', 'C19', 'C20'] + (['C21'] if include_anus else [])
+
+print("\nCancer type distribution (% of positive patients):")
+print("-" * 50)
+print(f"{'Cancer Type':<15} {'Overall':>12} {'TRAIN':>12} {'VAL':>12}")
+print("-" * 50)
+
+for cancer_type in cancer_types_to_check:
+    overall_pct = (all_positive['cancer_type'] == cancer_type).mean() * 100
+    train_pct = (train_positive['cancer_type'] == cancer_type).mean() * 100
+    val_pct = (val_positive['cancer_type'] == cancer_type).mean() * 100
+    print(f"{cancer_type:<15} {overall_pct:>11.2f}% {train_pct:>11.2f}% {val_pct:>11.2f}%")
+
+print("-" * 50)
+
+# Show absolute counts
+print("\nAbsolute counts by cancer type:")
+print("-" * 50)
+print(f"{'Cancer Type':<15} {'Overall':>12} {'TRAIN':>12} {'VAL':>12}")
+print("-" * 50)
+
+for cancer_type in cancer_types_to_check:
+    overall_count = (all_positive['cancer_type'] == cancer_type).sum()
+    train_count = (train_positive['cancer_type'] == cancer_type).sum()
+    val_count = (val_positive['cancer_type'] == cancer_type).sum()
+    print(f"{cancer_type:<15} {overall_count:>12,} {train_count:>12,} {val_count:>12,}")
+
+print("-" * 50)
+print(f"{'TOTAL':<15} {len(all_positive):>12,} {len(train_positive):>12,} {len(val_positive):>12,}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC #### Conclusion - SGKF Split
+# MAGIC #### Conclusion - SGKF Split with Multi-Class Stratification
 # MAGIC Successfully split Q0-Q5 patients into TRAIN (~67%) and VAL (~33%) with:
-# MAGIC - Zero patient overlap between sets
-# MAGIC - Preserved class balance (event rates similar)
+# MAGIC - **Zero patient overlap** between sets
+# MAGIC - **Preserved positive patient rate** (overall event rate similar)
+# MAGIC - **Preserved cancer type distribution** (C18/C19/C20 proportions similar across splits)
+# MAGIC
+# MAGIC The multi-class stratification ensures that rare cancer subtypes (especially C19 rectosigmoid) are proportionally represented in both training and validation sets.
 
 # COMMAND ----------
 
@@ -3300,6 +3407,69 @@ assert len(train_pats.intersection(test_pats)) == 0, "TRAIN/TEST overlap!"
 assert len(val_pats.intersection(test_pats)) == 0, "VAL/TEST overlap!"
 
 print("\n✓ No patient overlap across splits - data leakage prevention verified")
+
+# =============================================================================
+# VERIFY CANCER TYPE DISTRIBUTION ACROSS ALL THREE SPLITS (INCLUDING TEST)
+# =============================================================================
+print("\n" + "="*70)
+print("FINAL CANCER TYPE DISTRIBUTION ACROSS ALL SPLITS")
+print("="*70)
+
+# Get positive observations by split with cancer type
+cancer_dist_df = df_final.filter(F.col("FUTURE_CRC_EVENT") == 1).groupBy("SPLIT", "ICD10_GROUP").agg(
+    F.countDistinct("PAT_ID").alias("patient_count")
+).toPandas()
+
+# Get total positive patients by split
+totals_by_split = cancer_dist_df.groupby("SPLIT")["patient_count"].sum()
+
+# Include C21 if include_anus=True
+cancer_types_final = ['C18', 'C19', 'C20'] + (['C21'] if include_anus else [])
+
+# Display distribution
+print("\nCancer type distribution by split (% of positive patients in each split):")
+print("-" * 65)
+print(f"{'Cancer Type':<12} {'TRAIN':>12} {'VAL':>12} {'TEST':>12} {'OVERALL':>12}")
+print("-" * 65)
+
+for cancer_type in cancer_types_final:
+    row_data = []
+    for split in ['train', 'val', 'test']:
+        mask = (cancer_dist_df['SPLIT'] == split) & (cancer_dist_df['ICD10_GROUP'] == cancer_type)
+        count = cancer_dist_df.loc[mask, 'patient_count'].sum() if mask.any() else 0
+        total = totals_by_split.get(split, 1)
+        pct = (count / total * 100) if total > 0 else 0
+        row_data.append(pct)
+
+    # Calculate overall
+    overall_count = cancer_dist_df[cancer_dist_df['ICD10_GROUP'] == cancer_type]['patient_count'].sum()
+    overall_total = cancer_dist_df['patient_count'].sum()
+    overall_pct = (overall_count / overall_total * 100) if overall_total > 0 else 0
+
+    print(f"{cancer_type:<12} {row_data[0]:>11.2f}% {row_data[1]:>11.2f}% {row_data[2]:>11.2f}% {overall_pct:>11.2f}%")
+
+print("-" * 65)
+
+# Show absolute counts
+print("\nAbsolute patient counts by cancer type and split:")
+print("-" * 65)
+print(f"{'Cancer Type':<12} {'TRAIN':>12} {'VAL':>12} {'TEST':>12} {'OVERALL':>12}")
+print("-" * 65)
+
+for cancer_type in cancer_types_final:
+    row_data = []
+    for split in ['train', 'val', 'test']:
+        mask = (cancer_dist_df['SPLIT'] == split) & (cancer_dist_df['ICD10_GROUP'] == cancer_type)
+        count = int(cancer_dist_df.loc[mask, 'patient_count'].sum()) if mask.any() else 0
+        row_data.append(count)
+    overall_count = int(cancer_dist_df[cancer_dist_df['ICD10_GROUP'] == cancer_type]['patient_count'].sum())
+    print(f"{cancer_type:<12} {row_data[0]:>12,} {row_data[1]:>12,} {row_data[2]:>12,} {overall_count:>12,}")
+
+print("-" * 65)
+total_by_split = [int(totals_by_split.get(s, 0)) for s in ['train', 'val', 'test']]
+print(f"{'TOTAL':<12} {total_by_split[0]:>12,} {total_by_split[1]:>12,} {total_by_split[2]:>12,} {int(cancer_dist_df['patient_count'].sum()):>12,}")
+
+print("\n✓ Cancer type distribution verified across all splits")
 
 # COMMAND ----------
 

@@ -34,14 +34,21 @@ METHODOLOGY_IMBALANCED/
 
 ### Phase 1: Book 0 - Cohort Creation with SGKF Splits (COMPLETE)
 
-Added train/val/test split assignments using StratifiedGroupKFold:
+Added train/val/test split assignments using StratifiedGroupKFold with **multi-class stratification by cancer type**:
 - **TEST (Q6)**: Last quarter of observations (temporal holdout)
 - **TRAIN (~67%)**: Q0-Q5 patients via SGKF
 - **VAL (~33%)**: Q0-Q5 patients via SGKF
 
+**Stratification classes:**
+- 0 = Negative (no CRC diagnosis)
+- 1 = C18 (colon cancer)
+- 2 = C19 (rectosigmoid junction cancer)
+- 3 = C20 (rectal cancer)
+
 Key guarantees:
 - NO patient appears in multiple splits (grouped by PAT_ID)
-- Class balance maintained across splits (stratified by FUTURE_CRC_EVENT)
+- **Cancer type distribution (C18/C19/C20) preserved** across splits
+- Rare subtypes (especially C19 rectosigmoid) proportionally represented
 - Random seed 217 for reproducibility
 
 Bug fixed: Changed `F.first("FUTURE_CRC_EVENT")` to `F.max("FUTURE_CRC_EVENT")` for correct patient-level stratification.
@@ -318,7 +325,7 @@ The actual stopping point depends on the data - we let the validation gate decid
 
 ## Key Technical Decisions
 
-1. **Temporal + Group Separation**: Q6 as temporal test set + SGKF for train/val
+1. **Temporal + Group Separation**: Q6 as temporal test set + SGKF for train/val with multi-class stratification by cancer type (C18/C19/C20)
 2. **3-Fold CV**: For computational efficiency with ~171 features
 3. **Linear Code Style**: No nested functions - keep readable for debugging
 4. **Documentation**: "What This Cell Does" + "Conclusion" markdown cells
@@ -384,7 +391,17 @@ baseline_crc_rate = df_train.select(F.avg('FUTURE_CRC_EVENT')).collect()[0][0]
 
 ```python
 from sklearn.model_selection import StratifiedGroupKFold
+
+# Create multi-class stratification label: 0=negative, 1=C18, 2=C19, 3=C20
+cancer_type_map = {'C18': 1, 'C19': 2, 'C20': 3}
+patient_labels['strat_label'] = patient_labels.apply(
+    lambda row: cancer_type_map.get(row['cancer_type'], 0) if row['is_positive'] == 1 else 0,
+    axis=1
+)
+
 sgkf = StratifiedGroupKFold(n_splits=3, shuffle=True, random_state=217)
+y = patient_labels['strat_label'].values  # Multi-class: 0=neg, 1=C18, 2=C19, 3=C20
+groups = patient_labels['PAT_ID'].values
 # Takes first fold split: ~67% train, ~33% val
-train_idx, val_idx = list(sgkf.split(X_dummy, y, groups))[0]
+train_idx, val_idx = next(sgkf.split(X_dummy, y, groups))
 ```

@@ -621,8 +621,9 @@ else:
     # Convert datetime
     df_pandas['END_DTTM'] = pd.to_datetime(df_pandas['END_DTTM'])
 
-    # Identify feature columns (exclude identifiers and target)
-    exclude_cols = ['PAT_ID', 'END_DTTM', 'FUTURE_CRC_EVENT', 'SPLIT']
+    # Identify feature columns (exclude identifiers, target, and outcome-related columns)
+    # ICD10_CODE and ICD10_GROUP are the diagnosis codes for the CRC outcome - NOT features!
+    exclude_cols = ['PAT_ID', 'END_DTTM', 'FUTURE_CRC_EVENT', 'SPLIT', 'ICD10_CODE', 'ICD10_GROUP']
     feature_cols = [c for c in df_pandas.columns if c not in exclude_cols]
 
     # Calculate scale_pos_weight from training data

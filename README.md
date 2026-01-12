@@ -53,13 +53,14 @@ Not all negative labels are equally reliable. Our three-tier approach maximizes 
 | **Tier 2** | Return visit 4-6 months + PCP | Medium | ~23% |
 | **Tier 3** | No return but has PCP | Assumed | ~30% |
 
-### 2. Patient-Level Stratification
+### 2. Patient-Level Stratification by Cancer Type
 
-StratifiedGroupKFold ensures no patient appears in multiple splits, preventing data leakage while maintaining class balance:
+StratifiedGroupKFold ensures no patient appears in multiple splits, preventing data leakage while preserving cancer subtype distribution:
 
 - **Groups**: Patient IDs (all observations from one patient stay together)
-- **Stratification**: Patient-level outcome (positive if any observation is positive)
+- **Stratification**: Multi-class by cancer type (0=negative, 1=C18 colon, 2=C19 rectosigmoid, 3=C20 rectum)
 - **Temporal holdout**: Q6 test set provides true out-of-time validation
+- **Cancer type preservation**: C18/C19/C20 proportions maintained across train/val splits
 
 ### 3. Multi-Source Feature Engineering
 

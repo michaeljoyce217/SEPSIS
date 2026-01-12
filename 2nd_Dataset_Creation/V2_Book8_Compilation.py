@@ -744,8 +744,9 @@ print("="*80)
 print("PREPROCESSING: FEATURE QUALITY CHECKS")
 print("="*80)
 
-# Exclude identifiers and target from 
-exclude_cols = ['PAT_ID', 'END_DTTM', 'FUTURE_CRC_EVENT']
+# Exclude identifiers, target, and outcome-related diagnosis columns
+# ICD10_CODE and ICD10_GROUP are the diagnosis codes for the CRC outcome - NOT features!
+exclude_cols = ['PAT_ID', 'END_DTTM', 'FUTURE_CRC_EVENT', 'SPLIT', 'ICD10_CODE', 'ICD10_GROUP']
 feature_cols = [c for c in df.columns if c not in exclude_cols]
 
 print(f"\nStarting with {len(feature_cols)} features")
@@ -900,15 +901,17 @@ if len(features_to_remove) > 0:
         print(f"  - {feat}")
     
     # Create cleaned table
-    keep_cols = ['PAT_ID', 'END_DTTM', 'FUTURE_CRC_EVENT'] + \
+    # Keep identifiers, target, SPLIT (for downstream filtering), plus clean features
+    # Explicitly exclude ICD10_CODE and ICD10_GROUP (outcome-related, not features)
+    keep_cols = ['PAT_ID', 'END_DTTM', 'FUTURE_CRC_EVENT', 'SPLIT'] + \
                 [c for c in feature_cols if c not in features_to_remove]
-    
+
     df_cleaned = df.select(keep_cols)
-    
+
     df_cleaned.write.mode("overwrite").option("mergeSchema", "true").saveAsTable("dev.clncl_ds.herald_eda_train_wide_cleaned")
-    
+
     print(f"\n✓ Cleaned table created: dev.clncl_ds.herald_eda_train_wide_cleaned")
-    print(f"  Columns: {len(keep_cols)} ({len(keep_cols) - 3} features + 2 IDs + 1 target)")
+    print(f"  Columns: {len(keep_cols)} ({len(keep_cols) - 4} features + 2 IDs + 1 target + 1 split)")
 else:
     print("\n✓ No features removed - original table is clean")
     print("  You can proceed with dev.clncl_ds.herald_eda_train_wide")
