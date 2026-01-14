@@ -124,7 +124,9 @@ CREATE TABLE IF NOT EXISTS {INFERENCE_SCORE_TABLE} (
     letter_type STRING,
     letter_text STRING,
     letter_curated_date DATE,
-    denial_info_json STRING,
+    payor STRING,
+    original_drg STRING,
+    proposed_drg STRING,
     gold_letter_used STRING,
     gold_letter_score FLOAT,
     pipeline_version STRING,
@@ -206,46 +208,11 @@ except Exception as e:
     gold_letters_cache = []
 
 # =============================================================================
-# CELL 8: Parser Prompt - Extract Structured Data from Denial Letter
+# CELL 8: [REMOVED - Parsing now done in featurization.py]
 # =============================================================================
-# This prompt instructs the LLM to extract key information from denial letters.
-# The output is JSON that we can use to:
-# 1. Filter cases (is it sepsis-related?)
-# 2. Populate the rebuttal letter template
-# 3. Target specific denial arguments in our response
-PARSER_PROMPT = '''You are a medical billing expert extracting information from denial letters.
-
-# Task
-Extract ALL relevant information from this denial letter into structured JSON.
-
-# Denial Letter
-{denial_letter_text}
-
-# Output Format
-Return ONLY valid JSON (no markdown):
-{{
-  "denial_date": "YYYY-MM-DD or null",
-  "payer_name": "Insurance company name",
-  "payer_address": "Full mailing address or null",
-  "reviewer_name": "Name and credentials or null",
-  "original_drg": "Billed DRG (e.g., '871')",
-  "proposed_drg": "Payer's proposed DRG (e.g., '872')",
-  "administrative_data": {{
-    "claim_reference_number": "Primary claim/reference number",
-    "member_id": "Patient member ID",
-    "authorization_number": "Prior auth number or null",
-    "date_of_service": "Admission date or date range",
-    "other_identifiers": {{}}
-  }},
-  "denial_reasons": [{{
-    "type": "clinical_validation | medical_necessity | level_of_care | coding | other",
-    "summary": "Brief summary",
-    "specific_arguments": ["Each specific argument made"],
-    "payer_quote": "Direct quote if available"
-  }}],
-  "is_sepsis_related": true/false,
-  "is_single_issue": true/false
-}}'''
+# Denial parsing (DRG codes, sepsis flag) is now pre-computed in featurization.py
+# using a simple key-value format instead of JSON. This eliminates JSON parsing
+# errors and saves one LLM call per case at inference time.
 
 # =============================================================================
 # CELL 9: Writer Prompt - Generate the Rebuttal Letter
@@ -263,8 +230,8 @@ Return ONLY valid JSON (no markdown):
 #    for consistency and professional appearance.
 WRITER_PROMPT = '''You are a clinical coding expert writing a DRG validation appeal letter for Mercy Hospital.
 
-# Denial Information
-{denial_info_json}
+# Original Denial Letter (read this carefully)
+{denial_letter_text}
 
 # Clinical Notes (PRIMARY EVIDENCE - use these first)
 ## Discharge Summary
@@ -277,15 +244,23 @@ WRITER_PROMPT = '''You are a clinical coding expert writing a DRG validation app
 {gold_letter_section}
 
 # Patient Information
-{patient_info_json}
+Name: {patient_name}
+DOB: {patient_dob}
+Hospital Account #: {hsp_account_id}
+Date of Service: {date_of_service}
+Facility: {facility_name}
+Original DRG: {original_drg}
+Proposed DRG: {proposed_drg}
+Payor: {payor}
 
 # Instructions
 {gold_letter_instructions}
-1. ADDRESS EACH DENIAL ARGUMENT - quote the payer, then refute
-2. CITE CLINICAL EVIDENCE from provider notes FIRST (best source)
-3. Follow the Mercy Hospital template structure exactly
-4. Include specific clinical values (lactate 2.4, MAP 62, etc.)
-5. DELETE sections that don't apply to this patient
+1. READ THE DENIAL LETTER - extract the payor address, reviewer name, claim numbers
+2. ADDRESS EACH DENIAL ARGUMENT - quote the payer, then refute
+3. CITE CLINICAL EVIDENCE from provider notes FIRST (best source)
+4. Follow the Mercy Hospital template structure exactly
+5. Include specific clinical values (lactate 2.4, MAP 62, etc.)
+6. DELETE sections that don't apply to this patient
 
 # Template Structure
 Return the complete letter text following this structure:
@@ -298,17 +273,17 @@ Springfield, MO 65804
 
 {current_date}
 
-[PAYOR ADDRESS]
+[PAYOR ADDRESS - extract from denial letter]
 
 First Level Appeal
 
-Beneficiary Name: [NAME]
-DOB: [DOB]
-Claim reference #: [CLAIM_REF]
-Hospital Account #: [HSP_ACCOUNT_ID]
-Date of Service: [DOS]
+Beneficiary Name: {patient_name}
+DOB: {patient_dob}
+Claim reference #: [EXTRACT FROM DENIAL LETTER]
+Hospital Account #: {hsp_account_id}
+Date of Service: {date_of_service}
 
-Dear [REVIEWER]:
+Dear [REVIEWER - extract from denial letter]:
 
 [Opening paragraph about receiving DRG review...]
 
@@ -329,7 +304,7 @@ Hospital Course:
 [Summary paragraph...]
 
 Conclusion:
-We anticipate our original DRG of [X] will be approved.
+We anticipate our original DRG of {original_drg} will be approved.
 
 [Contact info and signature...]
 
@@ -339,11 +314,11 @@ Return ONLY the letter text, no JSON wrapper.'''
 # CELL 10: Main Processing Loop
 # =============================================================================
 # Process each denial case one at a time.
+# Parsing was moved to featurization.py - we use pre-computed columns here.
 # For each case:
-# 1. Parse the denial letter
-# 2. Check if it's in scope (sepsis-related)
-# 3. Find the best matching gold letter
-# 4. Generate the rebuttal
+# 1. Check if it's in scope (using pre-computed is_sepsis flag)
+# 2. Find the best matching gold letter (vector search)
+# 3. Generate the rebuttal
 
 if n_new_rows == 0:
     print("No new rows to process")
@@ -380,17 +355,18 @@ else:
             "hsp_account_id": hsp_account_id,
             "status": None,
             "letter_text": None,
-            "denial_info": None,
             "gold_letter_used": None,
             "gold_letter_score": None,
         }
 
-        # ---------------------------------------------------------------------
-        # STEP 1: Parse the denial letter
-        # ---------------------------------------------------------------------
-        # Extract structured information from the denial letter text.
-        # This gives us: payor name, DRG codes, denial reasons, etc.
+        # Get pre-computed values from featurization
         denial_text = row.get("denial_letter_text", "")
+        original_drg = row.get("original_drg", "")
+        proposed_drg = row.get("proposed_drg", "")
+        is_sepsis = row.get("is_sepsis", False)
+        payor = row.get("payor", "Unknown")
+
+        print(f"  DRG: {original_drg} → {proposed_drg} | Payor: {payor} | Sepsis: {is_sepsis}")
 
         # Skip if no denial text (can't process without it)
         if not denial_text or str(denial_text).strip() == "" or denial_text is None:
@@ -400,66 +376,25 @@ else:
             print("  SKIP: No denial letter text")
             continue
 
-        print("  Step 1: Parsing denial letter...")
-
-        # Call LLM to parse the denial letter
-        parser_response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Extract information accurately. Return only valid JSON."},
-                {"role": "user", "content": PARSER_PROMPT.format(denial_letter_text=denial_text)}
-            ],
-            temperature=0,    # Zero temp for consistent extraction
-            max_tokens=2000   # Denial info is typically <1000 tokens
-        )
-
-        # Parse the JSON response (handle markdown code blocks)
-        raw_parser = parser_response.choices[0].message.content.strip()
-        json_str = raw_parser
-        if "```json" in json_str:
-            json_str = json_str.split("```json")[1].split("```")[0].strip()
-        elif "```" in json_str:
-            json_str = json_str.split("```")[1].split("```")[0].strip()
-
-        try:
-            denial_info = json.loads(json_str)
-            # Handle case where LLM returns array instead of object
-            if isinstance(denial_info, list):
-                if len(denial_info) > 0:
-                    denial_info = denial_info[0]
-                else:
-                    raise ValueError("Empty array returned")
-        except (json.JSONDecodeError, ValueError) as e:
-            result["status"] = "parse_error"
-            result["error"] = f"JSON parse failed: {e}"
-            results.append(result)
-            print(f"  ERROR: JSON parse failed")
-            continue
-
-        result["denial_info"] = denial_info
-        print(f"  Parsed: DRG {denial_info.get('original_drg')} -> {denial_info.get('proposed_drg')}")
-
         # ---------------------------------------------------------------------
-        # STEP 2: Check if case is in scope
+        # STEP 1: Check if case is in scope (using pre-computed flag)
         # ---------------------------------------------------------------------
-        # For POC, we only process sepsis-related denials.
-        # The parser extracts is_sepsis_related from the denial content.
         if SCOPE_FILTER == "sepsis":
-            if not denial_info.get("is_sepsis_related"):
+            if not is_sepsis:
                 result["status"] = "out_of_scope"
                 result["reason"] = "Not sepsis-related"
                 results.append(result)
-                print("  SKIP: Not sepsis-related")
+                print("  SKIP: Not sepsis-related (pre-computed)")
                 continue
 
         # ---------------------------------------------------------------------
-        # STEP 3: Vector search for best matching gold letter
+        # STEP 2: Vector search for best matching gold letter
         # ---------------------------------------------------------------------
         # RIGOROUS ARCHITECTURE:
         # The denial_embedding was pre-computed in featurization.py using the
         # SAME generate_embedding() function as gold letters. This ensures
         # apples-to-apples comparison (no embedding generation here).
-        print("  Step 2: Finding similar gold standard letter...")
+        print("  Step 1: Finding similar gold standard letter...")
 
         gold_letter = None        # Will hold the best match (if found)
         gold_letter_score = 0.0   # Cosine similarity score
@@ -521,25 +456,12 @@ else:
         result["gold_letter_score"] = gold_letter_score
 
         # ---------------------------------------------------------------------
-        # STEP 4: Generate the rebuttal letter
+        # STEP 3: Generate the rebuttal letter
         # ---------------------------------------------------------------------
         # Combine everything into the Writer prompt and generate.
-        print("  Step 3: Generating rebuttal letter...")
+        print("  Step 2: Generating rebuttal letter...")
 
         current_date_str = date.today().strftime("%m/%d/%Y")
-
-        # Patient info for the letter header
-        patient_info = {
-            "formatted_name": row.get("formatted_name", ""),
-            "formatted_birthdate": row.get("formatted_birthdate", ""),
-            "hsp_account_id": row.get("hsp_account_id", ""),
-            "claim_number": row.get("claim_number", ""),
-            "formatted_date_of_service": row.get("formatted_date_of_service", ""),
-            "facility_name": row.get("facility_name", ""),
-            "number_of_midnights": row.get("number_of_midnights", ""),
-            "code": row.get("code", ""),
-            "dx_name": row.get("dx_name", ""),
-        }
 
         # Build the gold letter section for the prompt
         # If we found a matching gold letter, include it with strong instructions
@@ -564,14 +486,21 @@ Match Score: {gold_letter_score:.3f}
             gold_letter_section = "No similar winning rebuttal available. Use the Mercy template structure."
             gold_letter_instructions = ""
 
-        # Assemble the full Writer prompt
+        # Assemble the full Writer prompt (using pre-computed values, no JSON)
         writer_prompt = WRITER_PROMPT.format(
-            denial_info_json=json.dumps(denial_info, indent=2, default=str),
+            denial_letter_text=denial_text,
             discharge_summary=row.get("discharge_summary_text", "Not available"),
             hp_note=row.get("hp_note_text", "Not available"),
             gold_letter_section=gold_letter_section,
             gold_letter_instructions=gold_letter_instructions,
-            patient_info_json=json.dumps(patient_info, indent=2),
+            patient_name=row.get("formatted_name", ""),
+            patient_dob=row.get("formatted_birthdate", ""),
+            hsp_account_id=hsp_account_id,
+            date_of_service=row.get("formatted_date_of_service", ""),
+            facility_name=row.get("facility_name", "Mercy Hospital"),
+            original_drg=original_drg or "Unknown",
+            proposed_drg=proposed_drg or "Unknown",
+            payor=payor,
             current_date=current_date_str,
         )
 
@@ -637,7 +566,9 @@ if n_new_rows > 0 and 'results' in dir() and len(results) > 0:
                 "letter_type": "Sepsis_v2",  # Identifies this pipeline version
                 "letter_text": r["letter_text"],
                 "letter_curated_date": datetime.now().date(),
-                "denial_info_json": json.dumps(r.get("denial_info", {}), default=str),
+                "payor": getattr(orig_row, 'payor', 'Unknown'),
+                "original_drg": getattr(orig_row, 'original_drg', None),
+                "proposed_drg": getattr(orig_row, 'proposed_drg', None),
                 "gold_letter_used": r.get("gold_letter_used"),
                 "gold_letter_score": r.get("gold_letter_score"),
                 "pipeline_version": "rebuttal_engine_v2",
@@ -692,7 +623,6 @@ if EXPORT_TO_DOCX and 'output_rows' in dir() and len(output_rows) > 0:
         hsp_account_id = row["hsp_account_id"]
         patient_name = row.get("formatted_name", "Unknown")
         letter_text = row["letter_text"]
-        denial_info = json.loads(row["denial_info_json"]) if row["denial_info_json"] else {}
 
         # Create new Word document
         doc = Document()
@@ -709,9 +639,9 @@ if EXPORT_TO_DOCX and 'output_rows' in dir() and len(output_rows) > 0:
         meta.add_run("Patient: ").bold = True
         meta.add_run(f"{patient_name}\n")
         meta.add_run("Payor: ").bold = True
-        meta.add_run(f"{denial_info.get('payer_name', 'Unknown')}\n")
+        meta.add_run(f"{row.get('payor', 'Unknown')}\n")
         meta.add_run("DRG: ").bold = True
-        meta.add_run(f"{denial_info.get('original_drg', '?')} → {denial_info.get('proposed_drg', '?')}\n")
+        meta.add_run(f"{row.get('original_drg', '?')} → {row.get('proposed_drg', '?')}\n")
         meta.add_run("Gold Letter: ").bold = True
         if row.get("gold_letter_used"):
             meta.add_run(f"{row['gold_letter_used']} (score: {row.get('gold_letter_score', 0):.3f})\n")

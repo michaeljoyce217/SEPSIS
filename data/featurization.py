@@ -410,25 +410,25 @@ else:
 # =============================================================================
 # CELL 9: Parse Denial Letters (LLM extracts HSP_ACCOUNT_ID + Payor)
 # =============================================================================
-DENIAL_PARSER_PROMPT = '''Extract the hospital account ID and insurance payor from this denial letter.
+DENIAL_PARSER_PROMPT = '''Extract key information from this denial letter.
 
-# Denial Letter Text (first pages)
+# Denial Letter Text
 {denial_text}
 
 # Instructions
-Find the HOSPITAL ACCOUNT ID:
-- Look for account numbers starting with "H" followed by digits (e.g., H1234567890)
-- May be labeled as: Account #, Hospital Account, HSP Account, Acct, Hospital Acct #
-- MUST start with letter H - this is the hospital account format we need
-- If you find multiple, prefer the one starting with H
+Find:
+1. HOSPITAL ACCOUNT ID - starts with "H" followed by digits (e.g., H1234567890)
+2. INSURANCE PAYOR - the company that sent this denial
+3. ORIGINAL DRG - the DRG code the hospital billed (e.g., 871)
+4. PROPOSED DRG - the DRG the payor wants to change it to (e.g., 872)
+5. IS SEPSIS RELATED - does this denial involve sepsis, severe sepsis, or septic shock?
 
-Find the INSURANCE PAYOR (the insurance company that sent this denial)
-
-Return ONLY valid JSON:
-{{
-    "hsp_account_id": "the H-prefixed account number (e.g., H1234567890) or null if not found",
-    "payor": "insurance company name or Unknown"
-}}'''
+Return ONLY these lines (no JSON):
+ACCOUNT_ID: [H-prefixed number or NONE]
+PAYOR: [insurance company name]
+ORIGINAL_DRG: [3-digit code or NONE]
+PROPOSED_DRG: [3-digit code or NONE]
+IS_SEPSIS: [YES or NO]'''
 
 
 def transform_hsp_account_id(raw_id):
@@ -469,14 +469,14 @@ def transform_hsp_account_id(raw_id):
 
 def extract_denial_info_llm(text):
     """
-    Use LLM to extract HSP_ACCOUNT_ID and payor from denial letter.
-    More flexible than regex - handles various formats.
+    Use LLM to extract all denial info using simple key-value format.
+    Returns dict with: hsp_account_id, payor, original_drg, proposed_drg, is_sepsis
     """
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4.1",
             messages=[
-                {"role": "system", "content": "Extract information accurately. Return only valid JSON."},
+                {"role": "system", "content": "Extract information accurately. Return only the requested format."},
                 {"role": "user", "content": DENIAL_PARSER_PROMPT.format(denial_text=text[:15000])}
             ],
             temperature=0,
@@ -484,34 +484,58 @@ def extract_denial_info_llm(text):
         )
 
         raw = response.choices[0].message.content.strip()
-        # Handle markdown code blocks
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw:
-            raw = raw.split("```")[1].split("```")[0].strip()
 
-        result = json.loads(raw)
-        raw_account_id = result.get("hsp_account_id")
-        payor = result.get("payor", "Unknown")
+        # Parse key-value format
+        result = {
+            "hsp_account_id": None,
+            "payor": "Unknown",
+            "original_drg": None,
+            "proposed_drg": None,
+            "is_sepsis": False
+        }
 
-        # Transform account ID to match Clarity format
-        transformed_id = transform_hsp_account_id(raw_account_id)
+        for line in raw.split("\n"):
+            line = line.strip()
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = key.strip().upper()
+            value = value.strip()
 
-        if raw_account_id and transformed_id:
-            print(f"    Account ID: {raw_account_id} → {transformed_id} (transformed)")
+            if key == "ACCOUNT_ID":
+                if value and value.upper() != "NONE":
+                    result["hsp_account_id"] = transform_hsp_account_id(value)
+                    if result["hsp_account_id"]:
+                        print(f"    Account ID: {value} → {result['hsp_account_id']}")
+            elif key == "PAYOR":
+                result["payor"] = value if value else "Unknown"
+            elif key == "ORIGINAL_DRG":
+                if value and value.upper() != "NONE":
+                    result["original_drg"] = value
+            elif key == "PROPOSED_DRG":
+                if value and value.upper() != "NONE":
+                    result["proposed_drg"] = value
+            elif key == "IS_SEPSIS":
+                result["is_sepsis"] = value.upper() == "YES"
 
-        return transformed_id, payor
+        return result
 
     except Exception as e:
         print(f"    LLM extraction error: {e}")
-        return None, "Unknown"
+        return {
+            "hsp_account_id": None,
+            "payor": "Unknown",
+            "original_drg": None,
+            "proposed_drg": None,
+            "is_sepsis": False
+        }
 
 
 def process_sample_denial_letters():
     """
     Process all denial letters in Sample_Denial_Letters folder:
     1. Extract text using Document Intelligence
-    2. Use LLM to extract HSP_ACCOUNT_ID and payor
+    2. Use LLM to extract all denial info (account ID, payor, DRGs, sepsis flag)
     3. Generate embedding
     Returns list of dicts with all extracted info.
     """
@@ -534,11 +558,13 @@ def process_sample_denial_letters():
             full_text = "\n\n".join(pages)
             print(f"  Extracted {len(pages)} pages, {len(full_text)} chars")
 
-            # Step 2: LLM extracts account ID and payor
+            # Step 2: LLM extracts all denial info
             search_text = "\n".join(pages[:3]) if len(pages) >= 3 else full_text
-            hsp_account_id, payor = extract_denial_info_llm(search_text)
-            print(f"  Account ID: {hsp_account_id or 'NOT FOUND'}")
-            print(f"  Payor: {payor}")
+            info = extract_denial_info_llm(search_text)
+            print(f"  Account ID: {info['hsp_account_id'] or 'NOT FOUND'}")
+            print(f"  Payor: {info['payor']}")
+            print(f"  DRG: {info['original_drg']} → {info['proposed_drg']}")
+            print(f"  Sepsis: {info['is_sepsis']}")
 
             # Step 3: Generate embedding
             embedding = generate_embedding(full_text)
@@ -546,8 +572,11 @@ def process_sample_denial_letters():
 
             results.append({
                 "filename": pdf_file,
-                "hsp_account_id": hsp_account_id,
-                "payor": payor,
+                "hsp_account_id": info["hsp_account_id"],
+                "payor": info["payor"],
+                "original_drg": info["original_drg"],
+                "proposed_drg": info["proposed_drg"],
+                "is_sepsis": info["is_sepsis"],
                 "denial_text": full_text,
                 "denial_embedding": embedding,
                 "page_count": len(pages),
@@ -559,8 +588,10 @@ def process_sample_denial_letters():
 
     # Summary
     found = sum(1 for r in results if r["hsp_account_id"])
+    sepsis_count = sum(1 for r in results if r["is_sepsis"])
     print(f"\n{'='*60}")
     print(f"SUMMARY: {found}/{len(pdf_files)} letters have HSP_ACCOUNT_ID")
+    print(f"         {sepsis_count}/{len(pdf_files)} are sepsis-related")
     print(f"{'='*60}")
 
     return results
@@ -692,6 +723,12 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
         lambda x: denial_lookup.get(str(x), {}).get('denial_embedding'))
     clinical_df['payor'] = clinical_df['hsp_account_id'].map(
         lambda x: denial_lookup.get(str(x), {}).get('payor'))
+    clinical_df['original_drg'] = clinical_df['hsp_account_id'].map(
+        lambda x: denial_lookup.get(str(x), {}).get('original_drg'))
+    clinical_df['proposed_drg'] = clinical_df['hsp_account_id'].map(
+        lambda x: denial_lookup.get(str(x), {}).get('proposed_drg'))
+    clinical_df['is_sepsis'] = clinical_df['hsp_account_id'].map(
+        lambda x: denial_lookup.get(str(x), {}).get('is_sepsis', False))
     clinical_df['scope_filter'] = SCOPE_FILTER
     clinical_df['featurization_timestamp'] = datetime.now().isoformat()
 

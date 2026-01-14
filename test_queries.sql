@@ -14,7 +14,10 @@ SELECT
     COUNT(denial_letter_text) as has_denial_text,
     COUNT(denial_letter_filename) as has_denial_filename,
     COUNT(denial_embedding) as has_embedding,
-    COUNT(payor) as has_payor
+    COUNT(payor) as has_payor,
+    COUNT(original_drg) as has_original_drg,
+    COUNT(proposed_drg) as has_proposed_drg,
+    SUM(CASE WHEN is_sepsis THEN 1 ELSE 0 END) as sepsis_count
 FROM dev.fin_ds.fudgesicle_inference;
 
 -- 2. Check the actual data - KEY VALIDATION
@@ -22,6 +25,9 @@ SELECT
     hsp_account_id,
     formatted_name,
     payor,
+    original_drg,
+    proposed_drg,
+    is_sepsis,
     denial_letter_filename,
     LENGTH(denial_letter_text) as denial_chars,
     LENGTH(discharge_summary_text) as discharge_chars,
