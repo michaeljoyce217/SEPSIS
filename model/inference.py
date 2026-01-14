@@ -78,6 +78,7 @@ else:
 GOLD_LETTERS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_gold_letters"
 INFERENCE_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_inference"
 INFERENCE_SCORE_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_inference_score"
+PROPEL_DATA_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_propel_data"
 
 print(f"Catalog: {trgt_cat}")
 
@@ -208,6 +209,28 @@ except Exception as e:
     gold_letters_cache = []
 
 # =============================================================================
+# CELL 7B: Load Propel Definitions (official clinical criteria)
+# =============================================================================
+print("\nLoading Propel clinical definitions...")
+
+propel_definitions = {}
+
+try:
+    propel_df = spark.sql(f"""
+        SELECT condition_name, definition_text
+        FROM {PROPEL_DATA_TABLE}
+    """)
+    propel_rows = propel_df.collect()
+
+    for row in propel_rows:
+        propel_definitions[row["condition_name"]] = row["definition_text"]
+
+    print(f"Loaded {len(propel_definitions)} definitions: {list(propel_definitions.keys())}")
+except Exception as e:
+    print(f"Warning: Could not load propel definitions: {e}")
+    print("Will generate letters without official definitions.")
+
+# =============================================================================
 # CELL 8: [REMOVED - Parsing now done in featurization.py]
 # =============================================================================
 # Denial parsing (DRG codes, sepsis flag) is now pre-computed in featurization.py
@@ -239,6 +262,9 @@ WRITER_PROMPT = '''You are a clinical coding expert writing a DRG validation app
 
 ## H&P Note
 {hp_note}
+
+# Official Clinical Definition (USE THIS - not your general knowledge)
+{clinical_definition_section}
 
 # Gold Standard Letter (WINNING REBUTTAL - learn from this)
 {gold_letter_section}
@@ -486,11 +512,23 @@ Match Score: {gold_letter_score:.3f}
             gold_letter_section = "No similar winning rebuttal available. Use the Mercy template structure."
             gold_letter_instructions = ""
 
+        # Build the clinical definition section
+        # For sepsis cases, include the official Propel definition
+        if is_sepsis and "sepsis" in propel_definitions:
+            clinical_definition_section = f"""## OFFICIAL SEPSIS DEFINITION (from Propel)
+Use these criteria when arguing the patient meets sepsis diagnosis:
+
+{propel_definitions['sepsis']}
+"""
+        else:
+            clinical_definition_section = "No specific clinical definition loaded for this condition."
+
         # Assemble the full Writer prompt (using pre-computed values, no JSON)
         writer_prompt = WRITER_PROMPT.format(
             denial_letter_text=denial_text,
             discharge_summary=row.get("discharge_summary_text", "Not available"),
             hp_note=row.get("hp_note_text", "Not available"),
+            clinical_definition_section=clinical_definition_section,
             gold_letter_section=gold_letter_section,
             gold_letter_instructions=gold_letter_instructions,
             patient_name=row.get("formatted_name", ""),

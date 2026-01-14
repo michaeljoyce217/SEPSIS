@@ -48,10 +48,12 @@ else:
 # Table names
 GOLD_LETTERS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_gold_letters"
 INFERENCE_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_inference"
+PROPEL_DATA_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_propel_data"
 
 # Paths
 GOLD_LETTERS_PATH = "/Workspace/Repos/mijo8881@mercy.net/fudgesicle/utils/gold_standard_rebuttals"
 DENIAL_LETTERS_PATH = "/Workspace/Repos/mijo8881@mercy.net/fudgesicle/utils/Sample_Denial_Letters"
+PROPEL_DATA_PATH = "/Workspace/Repos/mijo8881@mercy.net/fudgesicle/utils/propel_data"
 
 print(f"Catalog: {trgt_cat}")
 
@@ -297,6 +299,17 @@ def parse_gold_letter_pdf(file_path):
     }
 
 
+def extract_text_from_docx(file_path):
+    """
+    PARSER: Extract text from DOCX file.
+    Returns the full text content.
+    """
+    from docx import Document
+    doc = Document(file_path)
+    paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
+    return "\n\n".join(paragraphs)
+
+
 print("Parser Agent functions loaded")
 
 # =============================================================================
@@ -323,6 +336,20 @@ print(f"Table {GOLD_LETTERS_TABLE} ready")
 # Let Spark create it from DataFrame schema to avoid type mismatches
 # (Python floats -> ARRAY<DOUBLE>, not ARRAY<FLOAT>)
 print(f"Inference table {INFERENCE_TABLE} will be created on first write")
+
+# Propel Data Table - stores official clinical definitions
+create_propel_table_sql = f"""
+CREATE TABLE IF NOT EXISTS {PROPEL_DATA_TABLE} (
+    condition_name STRING NOT NULL,
+    source_file STRING NOT NULL,
+    definition_text STRING,
+    created_at TIMESTAMP
+)
+USING DELTA
+COMMENT 'Official Propel clinical definitions for conditions'
+"""
+spark.sql(create_propel_table_sql)
+print(f"Table {PROPEL_DATA_TABLE} ready")
 
 # #############################################################################
 # PART 1: GOLD STANDARD LETTER INGESTION
@@ -401,6 +428,64 @@ if RUN_GOLD_INGESTION:
 
 else:
     print("Gold ingestion skipped (set RUN_GOLD_INGESTION = True)")
+
+# #############################################################################
+# PART 1B: PROPEL DATA INGESTION
+# Official clinical definitions for conditions (sepsis, etc.)
+# #############################################################################
+
+# =============================================================================
+# CELL 8B: Process Propel Data Files
+# =============================================================================
+RUN_PROPEL_INGESTION = False
+
+if RUN_PROPEL_INGESTION:
+    print("\n" + "="*60)
+    print("PROPEL DATA INGESTION")
+    print("="*60)
+
+    if os.path.exists(PROPEL_DATA_PATH):
+        docx_files = [f for f in os.listdir(PROPEL_DATA_PATH) if f.lower().endswith('.docx')]
+        print(f"Found {len(docx_files)} DOCX files in propel_data")
+
+        propel_records = []
+
+        for i, docx_file in enumerate(docx_files):
+            print(f"\n[{i+1}/{len(docx_files)}] Processing {docx_file}")
+            file_path = os.path.join(PROPEL_DATA_PATH, docx_file)
+
+            try:
+                # Extract text from DOCX
+                definition_text = extract_text_from_docx(file_path)
+                print(f"  Extracted {len(definition_text)} chars")
+
+                # Derive condition name from filename (e.g., "sepsis.docx" -> "sepsis")
+                condition_name = os.path.splitext(docx_file)[0].lower()
+                print(f"  Condition: {condition_name}")
+
+                propel_records.append({
+                    "condition_name": condition_name,
+                    "source_file": docx_file,
+                    "definition_text": definition_text,
+                    "created_at": datetime.now(),
+                })
+
+            except Exception as e:
+                print(f"  ERROR: {e}")
+                continue
+
+        if propel_records:
+            propel_df = spark.createDataFrame(propel_records)
+            propel_df.write.format("delta").mode("overwrite").saveAsTable(PROPEL_DATA_TABLE)
+            print(f"\nWrote {len(propel_records)} records to {PROPEL_DATA_TABLE}")
+
+        count = spark.sql(f"SELECT COUNT(*) as cnt FROM {PROPEL_DATA_TABLE}").collect()[0]["cnt"]
+        print(f"Total records in propel data table: {count}")
+    else:
+        print(f"WARNING: Propel data path not found: {PROPEL_DATA_PATH}")
+
+else:
+    print("\nPropel ingestion skipped (set RUN_PROPEL_INGESTION = True)")
 
 # #############################################################################
 # PART 2: NEW DENIAL FEATURIZATION
