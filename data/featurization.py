@@ -633,15 +633,8 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
         FROM prod.clarity_cur.hsp_account_enh ha
         INNER JOIN target_accounts ta ON ha.hsp_account_id = ta.hsp_account_id
     ),
-    claim_info AS (
-        SELECT hcd.hsp_account_id,
-               FIRST(hcd.claim_number) AS claim_number,
-               FIRST(hcd.tax_id) AS tax_id,
-               FIRST(hcd.npi) AS npi
-        FROM prod.clarity.hsp_claim_detail hcd
-        INNER JOIN target_accounts ta ON hcd.hsp_account_id = ta.hsp_account_id
-        GROUP BY hcd.hsp_account_id
-    ),
+    -- claim_info CTE removed: prod.clarity.hsp_claim_detail not available
+    -- claim_number, tax_id, npi will be NULL
     diagnosis AS (
         SELECT hadl.hsp_account_id,
                FIRST(edg.code) AS code,
@@ -655,7 +648,8 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     SELECT ta.hsp_account_id, pi.pat_id, pi.pat_mrn_id,
            pi.formatted_name, pi.formatted_birthdate,
            ai.facility_name, ai.number_of_midnights, ai.formatted_date_of_service,
-           ci.claim_number, ci.tax_id, ci.npi, d.code, d.dx_name,
+           NULL AS claim_number, NULL AS tax_id, NULL AS npi,  -- hsp_claim_detail not available
+           d.code, d.dx_name,
            CAST(dn.discharge_note_id AS STRING) AS discharge_summary_note_id,
            CAST(dn.discharge_note_csn_id AS STRING) AS discharge_note_csn_id,
            dn.discharge_summary_text,
@@ -665,7 +659,6 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     FROM target_accounts ta
     LEFT JOIN patient_info pi ON ta.hsp_account_id = pi.hsp_account_id
     LEFT JOIN account_info ai ON ta.hsp_account_id = ai.hsp_account_id
-    LEFT JOIN claim_info ci ON ta.hsp_account_id = ci.hsp_account_id
     LEFT JOIN diagnosis d ON ta.hsp_account_id = d.hsp_account_id
     LEFT JOIN discharge_notes dn ON ta.hsp_account_id = dn.hsp_account_id
     LEFT JOIN hp_notes hp ON ta.hsp_account_id = hp.hsp_account_id
