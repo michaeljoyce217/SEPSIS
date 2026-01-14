@@ -446,12 +446,17 @@ DENIAL_PARSER_PROMPT = '''Extract the hospital account ID and insurance payor fr
 {denial_text}
 
 # Instructions
-Find the HOSPITAL ACCOUNT ID (may be labeled as Account #, Hospital Account, HSP Account, Acct, etc.)
+Find the HOSPITAL ACCOUNT ID:
+- Look for account numbers starting with "H" followed by digits (e.g., H1234567890)
+- May be labeled as: Account #, Hospital Account, HSP Account, Acct, Hospital Acct #
+- MUST start with letter H - this is the hospital account format we need
+- If you find multiple, prefer the one starting with H
+
 Find the INSURANCE PAYOR (the insurance company that sent this denial)
 
 Return ONLY valid JSON:
 {{
-    "hsp_account_id": "the account number or null if not found",
+    "hsp_account_id": "the H-prefixed account number (e.g., H1234567890) or null if not found",
     "payor": "insurance company name or Unknown"
 }}'''
 
@@ -459,8 +464,10 @@ Return ONLY valid JSON:
 def transform_hsp_account_id(raw_id):
     """
     Transform HSP_ACCOUNT_ID from denial letter format to Clarity format.
-    Denial letters often have: H1234567890
+    Denial letters have: H1234567890
     Clarity needs: 12345678 (remove H prefix, remove last 2 digits)
+
+    Only processes IDs that start with H - skips others.
     """
     if not raw_id:
         return None
@@ -468,13 +475,20 @@ def transform_hsp_account_id(raw_id):
     # Remove any whitespace
     cleaned = str(raw_id).strip()
 
-    # Remove H prefix if present
-    if cleaned.upper().startswith('H'):
-        cleaned = cleaned[1:]
+    # MUST start with H - skip if not
+    if not cleaned.upper().startswith('H'):
+        print(f"    Skipping non-H account ID: {cleaned}")
+        return None
+
+    # Remove H prefix
+    cleaned = cleaned[1:]
 
     # Remove last 2 digits to match Clarity
     if len(cleaned) > 2:
         cleaned = cleaned[:-2]
+    else:
+        print(f"    Account ID too short after removing H: {raw_id}")
+        return None
 
     # Return only if we have digits left
     if cleaned and cleaned.isdigit():
