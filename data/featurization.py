@@ -117,28 +117,36 @@ doc_intel_client = DocumentIntelligenceClient(
     credential=AzureKeyCredential(AZURE_DOC_INTEL_KEY)
 )
 
-def read_pdf(file_path):
-    """Read text from a PDF file using Azure Document Intelligence"""
+def read_pdf_by_page(file_path):
+    """Read PDF and return text separated by page using Document Intelligence layout model"""
     try:
         with open(file_path, 'rb') as f:
             document_bytes = f.read()
 
-        # Submit document for analysis
+        # Use prebuilt-layout for better structure extraction
         poller = doc_intel_client.begin_analyze_document(
-            model_id="prebuilt-read",
+            model_id="prebuilt-layout",
             body=AnalyzeDocumentRequest(bytes_source=document_bytes),
         )
         result = poller.result()
 
-        # Extract text line by line, preserving document order
-        text_parts = []
+        # Extract text page by page - useful for splitting documents
+        pages_text = []
         for page in result.pages:
+            page_lines = []
             for line in page.lines:
-                text_parts.append(line.content)
-        return "\n".join(text_parts)
+                page_lines.append(line.content)
+            pages_text.append("\n".join(page_lines))
+
+        return pages_text  # List of strings, one per page
     except Exception as e:
         print(f"Error reading PDF {file_path}: {e}")
-        return f"Error reading PDF: {e}"
+        return [f"Error reading PDF: {e}"]
+
+def read_pdf(file_path):
+    """Read PDF and return full text using Document Intelligence layout model"""
+    pages = read_pdf_by_page(file_path)
+    return "\n\n=== PAGE BREAK ===\n\n".join(pages)
 
 def read_document(file_path):
     """Read text from PDF or TXT based on extension"""
@@ -259,46 +267,24 @@ print(f"Table {INFERENCE_TABLE} ready")
 # - payor: Insurance company name (for filtering/reporting)
 # - split_confidence: How confident the model is (0.0-1.0)
 # - split_reasoning: Explanation of how it found the split
-SPLIT_PROMPT = """You are analyzing a document that contains TWO business letters combined into one file.
+# Prompt to identify where the denial letter starts (page number)
+SPLIT_PROMPT = """This document contains TWO business letters:
+1. FIRST: A hospital's rebuttal/appeal letter
+2. SECOND: The original insurance denial letter (tacked on at the end)
 
-The document structure is:
-1. FIRST: A successful rebuttal/appeal letter (from a hospital to an insurance company)
-2. SECOND: The original denial letter that was being rebutted (tacked on at the end)
+The pages are separated by "=== PAGE BREAK ===".
 
-Each letter has typical business letter formatting: logo/letterhead, date, addresses, salutation, body, signature.
-
-Your tasks:
-1. Identify where the rebuttal letter ENDS and the original denial letter BEGINS
-2. Extract the PAYOR (insurance company) name from the denial letter
-
-Here is the document text:
----
 {document_text}
----
 
-Return a JSON object with exactly this structure:
-{{
-    "rebuttal_text": "The complete text of the rebuttal/appeal letter (the first letter)",
-    "denial_text": "The complete text of the original denial letter (the second letter, tacked on at end)",
-    "payor": "The insurance company/payor name (e.g., 'UnitedHealthcare', 'Aetna', 'Blue Cross Blue Shield', 'Humana', 'Cigna')",
-    "split_confidence": 0.0 to 1.0,
-    "split_reasoning": "Brief explanation of how you identified the split point"
-}}
+Answer these questions (one per line):
+1. DENIAL_STARTS_PAGE: Which page number does the denial letter START on? (1-indexed)
+2. PAYOR: What is the insurance company name from the denial letter?
+3. CONFIDENCE: How confident are you? (high/medium/low)
 
-IMPORTANT: Properly escape all special characters in the JSON strings:
-- Use \\n for newlines
-- Use \\" for quotes
-- Use \\\\ for backslashes
-
-Look for indicators like:
-- Change in letterhead/sender (hospital vs insurance company)
-- Change in date
-- Change in tone (appealing vs denying)
-- Phrases like "Dear Medical Review Team" (rebuttal) vs "Dear Provider" (denial)
-- References to "your denial" (rebuttal) vs "we have determined" (denial)
-- The payor name is usually in the denial letter's letterhead, signature block, or referenced in the rebuttal
-
-Return ONLY valid JSON, no markdown."""
+Format your response EXACTLY like this (no other text):
+DENIAL_STARTS_PAGE: [number]
+PAYOR: [company name]
+CONFIDENCE: [high/medium/low]"""
 
 # =============================================================================
 # CELL 9: Process Gold Standard Letters
@@ -325,58 +311,61 @@ if RUN_GOLD_INGESTION:
         file_path = os.path.join(GOLD_LETTERS_PATH, pdf_file)
 
         # ---------------------------------------------------------------------
-        # Step 1: Extract text from PDF using Document Intelligence
+        # Step 1: Extract text from PDF using Document Intelligence (by page)
         # ---------------------------------------------------------------------
         print("  Reading PDF...")
-        full_text = read_pdf(file_path)
-        print(f"  Extracted {len(full_text)} characters")
+        pages = read_pdf_by_page(file_path)
+        print(f"  Extracted {len(pages)} pages")
 
-        # Truncate if too long to avoid token limits and JSON issues
-        # Gold letters + denials combined should be under 50k chars
-        if len(full_text) > 50000:
-            print(f"  WARNING: Truncating from {len(full_text)} to 50000 chars")
-            full_text = full_text[:50000]
+        # Combine pages with markers for LLM
+        full_text = "\n\n=== PAGE BREAK ===\n\n".join(pages)
 
         # ---------------------------------------------------------------------
-        # Step 2: Use LLM to split document into rebuttal and denial
+        # Step 2: Ask LLM which page the denial starts on
         # ---------------------------------------------------------------------
-        # The combined PDF has the winning rebuttal first, then the original
-        # denial tacked on at the end. We need to separate them.
-        print("  Splitting rebuttal and denial...")
+        print("  Identifying split point...")
         response = openai_client.chat.completions.create(
             model="gpt-4.1",
             messages=[
-                {"role": "system", "content": "Extract the two letters accurately. Return only valid JSON."},
+                {"role": "system", "content": "Identify document structure. Be precise."},
                 {"role": "user", "content": SPLIT_PROMPT.format(document_text=full_text)}
             ],
-            temperature=0.1,  # Low temp for consistent extraction
-            max_tokens=16000  # Letters can be very long
+            temperature=0,
+            max_tokens=100  # Only need a few lines back
         )
 
-        # Parse LLM response - handle potential markdown code blocks
+        # Parse simple text response (not JSON)
         raw_response = response.choices[0].message.content.strip()
-        json_str = raw_response
-        if "```json" in json_str:
-            json_str = json_str.split("```json")[1].split("```")[0].strip()
-        elif "```" in json_str:
-            json_str = json_str.split("```")[1].split("```")[0].strip()
+        print(f"  LLM response: {raw_response}")
 
-        # Extract fields from JSON response with error handling
-        try:
-            split_result = json.loads(json_str)
-        except json.JSONDecodeError as e:
-            print(f"  ERROR: JSON parse failed: {e}")
-            print(f"  Response length: {len(raw_response)} chars")
-            print(f"  First 500 chars: {raw_response[:500]}")
-            print(f"  Last 500 chars: {raw_response[-500:]}")
-            # Try to salvage - skip this file and continue
-            print(f"  SKIPPING {pdf_file} due to JSON error")
-            continue
-        rebuttal_text = split_result.get("rebuttal_text", "")
-        denial_text = split_result.get("denial_text", "")
-        payor = split_result.get("payor", "Unknown")
-        split_confidence = str(split_result.get("split_confidence", 0.0))
-        split_reasoning = split_result.get("split_reasoning", "")
+        # Extract values from response
+        denial_start_page = 1
+        payor = "Unknown"
+        split_confidence = "low"
+
+        for line in raw_response.split("\n"):
+            line = line.strip()
+            if line.startswith("DENIAL_STARTS_PAGE:"):
+                try:
+                    denial_start_page = int(line.split(":")[1].strip())
+                except:
+                    pass
+            elif line.startswith("PAYOR:"):
+                payor = line.split(":", 1)[1].strip()
+            elif line.startswith("CONFIDENCE:"):
+                split_confidence = line.split(":")[1].strip().lower()
+
+        print(f"  Denial starts on page {denial_start_page}, Payor: {payor}")
+
+        # ---------------------------------------------------------------------
+        # Step 3: Split pages into rebuttal and denial
+        # ---------------------------------------------------------------------
+        # Pages before denial_start_page are rebuttal, rest is denial
+        rebuttal_pages = pages[:denial_start_page - 1]  # 0-indexed, so -1
+        denial_pages = pages[denial_start_page - 1:]    # From denial start to end
+
+        rebuttal_text = "\n\n".join(rebuttal_pages) if rebuttal_pages else ""
+        denial_text = "\n\n".join(denial_pages) if denial_pages else ""
 
         print(f"  Rebuttal: {len(rebuttal_text)} chars, Denial: {len(denial_text)} chars")
         print(f"  Payor: {payor}")
