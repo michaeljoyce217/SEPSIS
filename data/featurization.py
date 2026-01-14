@@ -438,11 +438,91 @@ else:
 # #############################################################################
 
 # =============================================================================
-# CELL 9: Target Accounts Configuration
+# CELL 9: Auto-Extract HSP_ACCOUNT_ID from Denial Letters
 # =============================================================================
-TARGET_ACCOUNTS = [
-    # ("HSP_ACCOUNT_ID", "denial_letter.pdf"),
-]
+def extract_hsp_account_id(text):
+    """
+    Extract HSP_ACCOUNT_ID from denial letter text using regex patterns.
+    Returns the account ID if found, None otherwise.
+    """
+    import re
+
+    # Patterns to look for (order by specificity)
+    patterns = [
+        # Hospital Account patterns
+        r'(?:hospital\s*account|hsp\s*account|account)\s*#?\s*:?\s*(\d{8,10})',
+        r'(?:hosp\.?\s*acct|acct)\s*#?\s*:?\s*(\d{8,10})',
+        # Account Number patterns
+        r'account\s*(?:number|no\.?|#)\s*:?\s*(\d{8,10})',
+        # Claim/Reference patterns (sometimes used interchangeably)
+        r'(?:claim|reference)\s*(?:number|no\.?|#)\s*:?\s*(\d{8,10})',
+        # Generic pattern - 8-10 digit number after "account"
+        r'account[:\s]+(\d{8,10})',
+    ]
+
+    text_lower = text.lower()
+
+    for pattern in patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            return match.group(1)
+
+    return None
+
+
+def auto_discover_denial_letters():
+    """
+    Scan Sample_Denial_Letters folder, extract HSP_ACCOUNT_ID from each PDF.
+    Returns list of (hsp_account_id, filename) tuples for successful extractions.
+    """
+    discovered = []
+    skipped = []
+
+    if not os.path.exists(DENIAL_LETTERS_PATH):
+        print(f"WARNING: Denial letters path not found: {DENIAL_LETTERS_PATH}")
+        return discovered
+
+    pdf_files = [f for f in os.listdir(DENIAL_LETTERS_PATH) if f.lower().endswith('.pdf')]
+    print(f"Found {len(pdf_files)} PDF files in Sample_Denial_Letters")
+
+    for pdf_file in pdf_files:
+        file_path = os.path.join(DENIAL_LETTERS_PATH, pdf_file)
+        try:
+            # Extract text from first few pages (account ID is usually near the top)
+            pages = extract_text_from_pdf(file_path)
+            # Check first 3 pages for account ID
+            search_text = "\n".join(pages[:3]) if len(pages) >= 3 else "\n".join(pages)
+
+            hsp_account_id = extract_hsp_account_id(search_text)
+
+            if hsp_account_id:
+                discovered.append((hsp_account_id, pdf_file))
+                print(f"  {pdf_file} → Account ID: {hsp_account_id}")
+            else:
+                skipped.append(pdf_file)
+                print(f"  {pdf_file} → No account ID found (skipped)")
+
+        except Exception as e:
+            skipped.append(pdf_file)
+            print(f"  {pdf_file} → Error: {e} (skipped)")
+
+    print(f"\nDiscovered {len(discovered)}/{len(pdf_files)} account IDs")
+    return discovered
+
+
+# Auto-discover or use manual configuration
+RUN_AUTO_DISCOVERY = True
+
+if RUN_AUTO_DISCOVERY:
+    print("\n" + "="*60)
+    print("AUTO-DISCOVERING HSP_ACCOUNT_IDs FROM DENIAL LETTERS")
+    print("="*60)
+    TARGET_ACCOUNTS = auto_discover_denial_letters()
+else:
+    # Manual configuration fallback
+    TARGET_ACCOUNTS = [
+        # ("HSP_ACCOUNT_ID", "denial_letter.pdf"),
+    ]
 
 print(f"\nTarget accounts: {len(TARGET_ACCOUNTS)}")
 
