@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sepsis Rebuttal Engine - Executive Overview</title>
+    <style>
+        :root {
+            --mercy-blue: #003366;
+            --mercy-light: #4a90c2;
+            --accent: #e85a30;
+            --success: #28a745;
+            --warning: #ffc107;
+            --light-bg: #f8f9fa;
+            --dark-text: #2c3e50;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--light-bg);
+            color: var(--dark-text);
+            line-height: 1.7;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--mercy-blue), var(--mercy-light));
+            color: white;
+            padding: 2.5rem 2rem;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+
+        header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .subtitle {
+            display: inline-block;
+            background: var(--accent);
+            padding: 0.4rem 1rem;
+            border-radius: 25px;
+            font-size: 0.9rem;
+            margin-top: 1rem;
+        }
+
+        .tabs {
+            display: flex;
+            background: var(--mercy-blue);
+            padding: 0 1rem;
+            gap: 0.5rem;
+            overflow-x: auto;
+            justify-content: center;
+        }
+
+        .tab {
+            padding: 1rem 1.5rem;
+            background: transparent;
+            border: none;
+            color: rgba(255,255,255,0.7);
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+            font-weight: 500;
+        }
+
+        .tab:hover {
+            color: white;
+            background: rgba(255,255,255,0.1);
+        }
+
+        .tab.active {
+            color: white;
+            background: var(--accent);
+            border-radius: 8px 8px 0 0;
+        }
+
+        .content {
+            max-width: 950px;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+        }
+
+        .panel {
+            display: none;
+            background: white;
+            padding: 2.5rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        }
+
+        .panel.active {
+            display: block;
+        }
+
+        h2 {
+            color: var(--mercy-blue);
+            margin-bottom: 1.5rem;
+            font-size: 1.8rem;
+            border-bottom: 3px solid var(--accent);
+            padding-bottom: 0.5rem;
+        }
+
+        h3 {
+            color: var(--mercy-light);
+            margin: 2rem 0 1rem;
+            font-size: 1.3rem;
+        }
+
+        p {
+            margin-bottom: 1rem;
+            font-size: 1.05rem;
+        }
+
+        ul, ol {
+            margin: 1rem 0 1.5rem 1.5rem;
+        }
+
+        li {
+            margin-bottom: 0.75rem;
+            font-size: 1.05rem;
+        }
+
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        .kpi-card {
+            background: linear-gradient(135deg, var(--mercy-blue), var(--mercy-light));
+            color: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .kpi-card .number {
+            font-size: 2.5rem;
+            font-weight: 700;
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+
+        .kpi-card .label {
+            font-size: 0.95rem;
+            opacity: 0.9;
+        }
+
+        .workflow-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 1.5rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--light-bg);
+            border-radius: 10px;
+            border-left: 5px solid var(--mercy-light);
+        }
+
+        .step-number {
+            background: var(--accent);
+            color: white;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .step-content h4 {
+            color: var(--mercy-blue);
+            margin-bottom: 0.5rem;
+            font-size: 1.2rem;
+        }
+
+        .step-content p {
+            margin: 0;
+            color: #555;
+        }
+
+        .callout {
+            background: #e8f4fd;
+            border: 1px solid var(--mercy-light);
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .callout.important {
+            background: #fff3e0;
+            border-color: var(--accent);
+        }
+
+        .callout.success {
+            background: #e8f5e9;
+            border-color: var(--success);
+        }
+
+        .callout h4 {
+            color: var(--mercy-blue);
+            margin-bottom: 0.5rem;
+            font-size: 1.1rem;
+        }
+
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+            font-size: 1rem;
+        }
+
+        .comparison-table th {
+            background: var(--mercy-blue);
+            color: white;
+            padding: 1rem;
+            text-align: left;
+        }
+
+        .comparison-table td {
+            padding: 1rem;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .comparison-table tr:nth-child(even) {
+            background: var(--light-bg);
+        }
+
+        .comparison-table .old {
+            color: #888;
+        }
+
+        .comparison-table .new {
+            color: var(--success);
+            font-weight: 500;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .status-badge.ready {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-badge.review {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .pipeline-visual {
+            background: var(--dark-text);
+            color: white;
+            padding: 2rem;
+            border-radius: 12px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.8rem;
+            overflow-x: auto;
+            white-space: pre;
+            line-height: 1.4;
+            margin: 1.5rem 0;
+        }
+
+        .roi-highlight {
+            background: linear-gradient(135deg, #e8f5e9, #c8e6c9);
+            border: 2px solid var(--success);
+            border-radius: 12px;
+            padding: 2rem;
+            margin: 2rem 0;
+            text-align: center;
+        }
+
+        .roi-highlight h3 {
+            color: var(--success);
+            margin: 0 0 1rem 0;
+            font-size: 1.4rem;
+        }
+
+        .roi-highlight .big-number {
+            font-size: 3rem;
+            font-weight: 700;
+            color: var(--mercy-blue);
+            display: block;
+            margin: 0.5rem 0;
+        }
+
+        .benefit-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        .benefit-card {
+            background: var(--light-bg);
+            padding: 1.5rem;
+            border-radius: 10px;
+            text-align: center;
+            border-top: 4px solid var(--accent);
+        }
+
+        .benefit-card .icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .benefit-card h4 {
+            color: var(--mercy-blue);
+            margin-bottom: 0.5rem;
+        }
+
+        .benefit-card p {
+            font-size: 0.95rem;
+            color: #666;
+            margin: 0;
+        }
+
+        .timeline {
+            margin: 2rem 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .timeline li {
+            position: relative;
+            padding-left: 2rem;
+            margin-bottom: 1.5rem;
+            border-left: 3px solid var(--mercy-light);
+            padding-bottom: 1rem;
+        }
+
+        .timeline li.current {
+            border-left-color: var(--accent);
+        }
+
+        .timeline li.current::before {
+            background: var(--accent);
+        }
+
+        .timeline li.done {
+            border-left-color: var(--success);
+        }
+
+        .timeline li.done::before {
+            background: var(--success);
+        }
+
+        .timeline li::before {
+            content: '';
+            position: absolute;
+            left: -8px;
+            top: 0;
+            width: 14px;
+            height: 14px;
+            background: var(--mercy-light);
+            border-radius: 50%;
+        }
+
+        .timeline .phase {
+            font-weight: 600;
+            color: var(--mercy-blue);
+        }
+
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 1.8rem;
+            }
+            .kpi-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Sepsis Rebuttal Engine</h1>
+        <p>Multi-Agent AI for DRG Appeal Letter Automation</p>
+        <span class="subtitle">Executive Overview | Financial Data Science</span>
+    </header>
+
+    <nav class="tabs">
+        <button class="tab active" data-tab="summary">Executive Summary</button>
+        <button class="tab" data-tab="problem">The Problem</button>
+        <button class="tab" data-tab="solution">Our Solution</button>
+        <button class="tab" data-tab="architecture">How It Works</button>
+        <button class="tab" data-tab="roi">ROI & Impact</button>
+        <button class="tab" data-tab="status">Current Status</button>
+    </nav>
+
+    <main class="content">
+        <!-- Executive Summary Panel -->
+        <section id="summary" class="panel active">
+            <h2>Executive Summary</h2>
+
+            <p>
+                The <strong>Sepsis Rebuttal Engine</strong> is an AI-powered system that automates the
+                drafting of DRG appeal letters when payors attempt to downgrade sepsis codes (DRG 870, 871, 872).
+                Using vector search and LLM technology, it reduces letter drafting time from 60+ minutes to under
+                10 minutes while maintaining quality through mandatory human review.
+            </p>
+
+            <div class="kpi-grid">
+                <div class="kpi-card">
+                    <span class="number">85%</span>
+                    <span class="label">Time Reduction Per Letter</span>
+                </div>
+                <div class="kpi-card">
+                    <span class="number">4</span>
+                    <span class="label">Unity Catalog Tables</span>
+                </div>
+                <div class="kpi-card">
+                    <span class="number">100%</span>
+                    <span class="label">Human Review Before Send</span>
+                </div>
+                <div class="kpi-card">
+                    <span class="number">$0</span>
+                    <span class="label">New Infrastructure Cost</span>
+                </div>
+            </div>
+
+            <h3>Key Differentiators</h3>
+            <ul>
+                <li><strong>Vector Search:</strong> Finds the most similar past denial using embeddings - matches proven winning arguments to new cases</li>
+                <li><strong>Knowledge Integration:</strong> Automatically includes Propel clinical criteria and learns from successful past appeals</li>
+                <li><strong>Built In-House:</strong> No vendor lock-in, full control over improvements and expansion</li>
+                <li><strong>Human-in-the-Loop:</strong> CDI specialists review and approve every letter - AI assists, humans decide</li>
+                <li><strong>Extensible Design:</strong> Architecture supports any denial type; sepsis is the initial focus</li>
+            </ul>
+
+            <div class="callout success">
+                <h4>Strategic Value</h4>
+                <p>
+                    This project positions Mercy at the forefront of healthcare AI adoption. While competitors
+                    rely on basic AI tools or expensive vendors, we're building institutional capability that
+                    improves with every case processed. The gold letter library captures institutional knowledge
+                    that stays with Mercy regardless of staff turnover.
+                </p>
+            </div>
+        </section>
+
+        <!-- The Problem Panel -->
+        <section id="problem" class="panel">
+            <h2>The Problem We're Solving</h2>
+
+            <h3>Sepsis DRG Downgrades Cost Millions</h3>
+            <p>
+                Insurance payors routinely attempt to downgrade sepsis DRG codes, reducing reimbursement
+                by thousands of dollars per case. Successfully appealing these denials requires:
+            </p>
+            <ul>
+                <li>Reading and analyzing multi-page denial letters</li>
+                <li>Researching clinical criteria in Propel documentation</li>
+                <li>Extracting relevant evidence from patient records</li>
+                <li>Composing persuasive, well-documented appeal letters</li>
+            </ul>
+
+            <h3>Current Process is Manual and Time-Intensive</h3>
+            <table class="comparison-table">
+                <tr>
+                    <th>Task</th>
+                    <th>Time Required</th>
+                </tr>
+                <tr>
+                    <td>Read denial letter, extract key arguments</td>
+                    <td>10-15 minutes</td>
+                </tr>
+                <tr>
+                    <td>Research Propel criteria for applicable guidelines</td>
+                    <td>10-20 minutes</td>
+                </tr>
+                <tr>
+                    <td>Review patient notes for supporting evidence</td>
+                    <td>15-20 minutes</td>
+                </tr>
+                <tr>
+                    <td>Draft the appeal letter</td>
+                    <td>20-30 minutes</td>
+                </tr>
+                <tr>
+                    <td>Review and finalize</td>
+                    <td>5-10 minutes</td>
+                </tr>
+                <tr>
+                    <td><strong>Total Per Letter</strong></td>
+                    <td><strong>60-95 minutes</strong></td>
+                </tr>
+            </table>
+
+            <h3>The Bottleneck</h3>
+            <div class="callout important">
+                <h4>Limited Capacity = Missed Revenue</h4>
+                <p>
+                    With limited CDI specialist time and tight appeal deadlines, not every denial can
+                    receive a thorough response. Lower-dollar cases may receive less attention, and
+                    some deadlines are missed entirely. Each uncontested downgrade represents lost revenue.
+                </p>
+            </div>
+
+            <h3>Why Generic AI Tools Fall Short</h3>
+            <p>
+                Off-the-shelf AI solutions (ChatGPT, Copilot, etc.) can help draft text, but they:
+            </p>
+            <ul>
+                <li><strong>Don't know Mercy's templates</strong> - Letters must follow specific formats</li>
+                <li><strong>Can't access Propel</strong> - No integration with clinical criteria sources</li>
+                <li><strong>Lack institutional memory</strong> - Don't learn from our successful appeals</li>
+                <li><strong>Require manual copy-paste</strong> - No integration with Epic/Clarity</li>
+                <li><strong>Produce inconsistent results</strong> - Quality varies significantly</li>
+            </ul>
+        </section>
+
+        <!-- Our Solution Panel -->
+        <section id="solution" class="panel">
+            <h2>Our Solution</h2>
+
+            <p>
+                The Sepsis Rebuttal Engine is a purpose-built system that automates the research and
+                drafting process while keeping CDI specialists in control of the final product.
+            </p>
+
+            <h3>Two-Stage Pipeline</h3>
+
+            <div class="workflow-step">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                    <h4>Featurization (Data Preparation)</h4>
+                    <p>
+                        Processes denial letter PDFs: extracts text using Azure Document Intelligence,
+                        uses LLM to identify account ID, payor, DRG codes, and sepsis relevance.
+                        Generates embeddings for vector search and joins with Clarity clinical notes
+                        (discharge summary, H&P).
+                    </p>
+                </div>
+            </div>
+
+            <div class="workflow-step">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                    <h4>Inference (Letter Generation)</h4>
+                    <p>
+                        For each sepsis case: performs vector search to find the most similar past denial
+                        from our gold letter library, includes the official Propel sepsis definition,
+                        and generates a complete rebuttal letter using the patient's clinical notes.
+                        Outputs Word documents for CDI review.
+                    </p>
+                </div>
+            </div>
+
+            <h3>Knowledge Sources</h3>
+
+            <div class="benefit-grid">
+                <div class="benefit-card">
+                    <div class="icon">&#128218;</div>
+                    <h4>Gold Letters</h4>
+                    <p>Library of past winning rebuttals - proven arguments that worked</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="icon">&#128202;</div>
+                    <h4>Propel Criteria</h4>
+                    <p>Official sepsis definition injected into every prompt</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="icon">&#128196;</div>
+                    <h4>Clinical Notes</h4>
+                    <p>Discharge summary and H&P from Clarity - primary evidence</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="icon">&#128221;</div>
+                    <h4>Denial Letter</h4>
+                    <p>Full text passed to writer - addresses specific arguments</p>
+                </div>
+            </div>
+
+            <h3>Human-in-the-Loop Workflow</h3>
+            <div class="callout">
+                <h4>AI Assists, Humans Decide</h4>
+                <p>
+                    Every generated letter is exported as a Word document for review. CDI specialists verify accuracy,
+                    make edits as needed, and give final approval before any letter is sent. The AI
+                    handles the time-consuming research and drafting; humans provide judgment and
+                    quality control.
+                </p>
+            </div>
+        </section>
+
+        <!-- Architecture Panel -->
+        <section id="architecture" class="panel">
+            <h2>How It Works</h2>
+
+            <h3>System Architecture</h3>
+            <div class="pipeline-visual">
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         KNOWLEDGE LAYER                                      │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                  │
+│  │    Propel    │    │    Gold      │    │   Clinical   │                  │
+│  │   Criteria   │    │   Letters    │    │    Notes     │                  │
+│  │  (propel_    │    │  (gold_      │    │   (Clarity)  │                  │
+│  │   data)      │    │   letters)   │    │              │                  │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘                  │
+│         │                   │                   │                           │
+│         └─────────┬─────────┴─────────┬─────────┘                           │
+│                   ▼                   ▼                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                        PIPELINE                                     │   │
+│  │                                                                     │   │
+│  │  [Denial PDF] ──► FEATURIZATION ──► [Inference Table]              │   │
+│  │                   • Extract text (Document Intelligence)            │   │
+│  │                   • Parse info (LLM: account ID, payor, DRGs)      │   │
+│  │                   • Generate embedding (ada-002)                    │   │
+│  │                   • Join with Clarity clinical notes                │   │
+│  │                                                                     │   │
+│  │  [Inference Table] ──► INFERENCE ──► [DOCX Letter]                 │   │
+│  │                        • Filter sepsis cases (is_sepsis flag)       │   │
+│  │                        • Vector search gold letters (cosine sim)    │   │
+│  │                        • Include Propel definition                  │   │
+│  │                        • Generate rebuttal (GPT-4.1)                │   │
+│  │                        • Export to DOCX for review                  │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  [DOCX Letter] ──► CDI Review ──► Approved Letter ──► Send to Payor        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘</div>
+
+            <h3>Unity Catalog Tables</h3>
+            <table class="comparison-table">
+                <tr>
+                    <th>Table</th>
+                    <th>Purpose</th>
+                </tr>
+                <tr>
+                    <td>fudgesicle_gold_letters</td>
+                    <td>Past winning rebuttals with denial embeddings for vector search</td>
+                </tr>
+                <tr>
+                    <td>fudgesicle_propel_data</td>
+                    <td>Official clinical criteria (sepsis definition from Propel)</td>
+                </tr>
+                <tr>
+                    <td>fudgesicle_inference</td>
+                    <td>Denial cases with clinical notes, ready for processing</td>
+                </tr>
+                <tr>
+                    <td>fudgesicle_inference_score</td>
+                    <td>Generated rebuttal letters with metadata (appends over time)</td>
+                </tr>
+            </table>
+
+            <h3>Technology Stack</h3>
+            <table class="comparison-table">
+                <tr>
+                    <th>Component</th>
+                    <th>Technology</th>
+                </tr>
+                <tr>
+                    <td>Platform</td>
+                    <td>Databricks on Azure (existing infrastructure)</td>
+                </tr>
+                <tr>
+                    <td>LLM</td>
+                    <td>Azure OpenAI GPT-4.1</td>
+                </tr>
+                <tr>
+                    <td>Embeddings</td>
+                    <td>Azure OpenAI text-embedding-ada-002 (1536 dims)</td>
+                </tr>
+                <tr>
+                    <td>Document OCR</td>
+                    <td>Azure AI Document Intelligence</td>
+                </tr>
+                <tr>
+                    <td>Storage</td>
+                    <td>Delta Lake tables in Unity Catalog</td>
+                </tr>
+                <tr>
+                    <td>Clinical Data</td>
+                    <td>Epic Clarity</td>
+                </tr>
+            </table>
+
+            <div class="callout">
+                <h4>No New Infrastructure Required</h4>
+                <p>
+                    The entire system runs on Mercy's existing Databricks and Azure environment.
+                    We're leveraging services we already pay for, maximizing ROI on existing investments.
+                </p>
+            </div>
+        </section>
+
+        <!-- ROI & Impact Panel -->
+        <section id="roi" class="panel">
+            <h2>ROI & Impact</h2>
+
+            <div class="roi-highlight">
+                <h3>Projected Time Savings</h3>
+                <span class="big-number">85%</span>
+                <p>Reduction in time per appeal letter<br>(60+ minutes manual &#8594; ~10 minutes for review)</p>
+            </div>
+
+            <h3>Efficiency Gains</h3>
+            <table class="comparison-table">
+                <tr>
+                    <th>Metric</th>
+                    <th>Before</th>
+                    <th>After</th>
+                    <th>Impact</th>
+                </tr>
+                <tr>
+                    <td>Time per letter</td>
+                    <td class="old">60-95 minutes</td>
+                    <td class="new">10-15 minutes</td>
+                    <td class="new">~50 min saved/letter</td>
+                </tr>
+                <tr>
+                    <td>Letters per day (per specialist)</td>
+                    <td class="old">5-6 letters</td>
+                    <td class="new">20-25 letters</td>
+                    <td class="new">4x throughput</td>
+                </tr>
+                <tr>
+                    <td>Research consistency</td>
+                    <td class="old">Varies by specialist</td>
+                    <td class="new">Standardized</td>
+                    <td class="new">Quality floor raised</td>
+                </tr>
+                <tr>
+                    <td>Institutional knowledge</td>
+                    <td class="old">In specialists' heads</td>
+                    <td class="new">Captured in gold letters</td>
+                    <td class="new">Survives turnover</td>
+                </tr>
+            </table>
+
+            <h3>Strategic Benefits</h3>
+            <div class="benefit-grid">
+                <div class="benefit-card">
+                    <div class="icon">&#128176;</div>
+                    <h4>Revenue Recovery</h4>
+                    <p>More appeals processed = more denials overturned = more revenue recovered</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="icon">&#127942;</div>
+                    <h4>Institutional Knowledge</h4>
+                    <p>Successful arguments captured in gold letter library - knowledge stays with Mercy</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="icon">&#128200;</div>
+                    <h4>Scalability</h4>
+                    <p>Handle volume increases without proportional staffing increases</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="icon">&#127919;</div>
+                    <h4>Consistency</h4>
+                    <p>Every letter uses same criteria, same evidence hierarchy, same quality standard</p>
+                </div>
+            </div>
+
+            <h3>Investment Profile</h3>
+            <ul>
+                <li><strong>Infrastructure cost:</strong> $0 incremental (uses existing Databricks/Azure)</li>
+                <li><strong>LLM cost:</strong> ~$0.10-0.25 per letter (Azure OpenAI usage)</li>
+                <li><strong>Development:</strong> Internal Financial Data Science team</li>
+                <li><strong>Ongoing maintenance:</strong> Minimal - system improves as gold letter library grows</li>
+            </ul>
+        </section>
+
+        <!-- Current Status Panel -->
+        <section id="status" class="panel">
+            <h2>Current Status</h2>
+
+            <h3>Implementation Status</h3>
+            <table class="comparison-table">
+                <tr>
+                    <th>Component</th>
+                    <th>Status</th>
+                </tr>
+                <tr>
+                    <td>Featurization pipeline</td>
+                    <td><span class="status-badge ready">Complete</span></td>
+                </tr>
+                <tr>
+                    <td>Denial letter parsing (LLM)</td>
+                    <td><span class="status-badge ready">Complete</span></td>
+                </tr>
+                <tr>
+                    <td>Gold letter ingestion</td>
+                    <td><span class="status-badge ready">Complete</span></td>
+                </tr>
+                <tr>
+                    <td>Propel criteria integration</td>
+                    <td><span class="status-badge ready">Complete</span></td>
+                </tr>
+                <tr>
+                    <td>Vector search (embeddings)</td>
+                    <td><span class="status-badge ready">Complete</span></td>
+                </tr>
+                <tr>
+                    <td>Clarity clinical notes join</td>
+                    <td><span class="status-badge ready">Complete</span></td>
+                </tr>
+                <tr>
+                    <td>Letter generation (LLM)</td>
+                    <td><span class="status-badge ready">Complete</span></td>
+                </tr>
+                <tr>
+                    <td>DOCX export</td>
+                    <td><span class="status-badge ready">Complete</span></td>
+                </tr>
+                <tr>
+                    <td>Unity Catalog tables</td>
+                    <td><span class="status-badge ready">Complete</span></td>
+                </tr>
+            </table>
+
+            <h3>Project Timeline</h3>
+            <ul class="timeline">
+                <li class="done">
+                    <span class="phase">Phase 1: POC Development</span><br>
+                    Build pipeline, integrate data sources, validate with sample letters.
+                    <strong>COMPLETE</strong>
+                </li>
+                <li class="current">
+                    <span class="phase">Phase 2: Pilot (Current)</span><br>
+                    Test with real denial letters, gather CDI feedback, refine prompts,
+                    build gold letter library.
+                </li>
+                <li>
+                    <span class="phase">Phase 3: Production</span><br>
+                    Full deployment for all sepsis denials. Integrate with Epic workqueue.
+                </li>
+                <li>
+                    <span class="phase">Phase 4: Expansion</span><br>
+                    Extend to additional denial types (pneumonia, CHF, etc.).
+                    Add Propel criteria, gold letters - no architecture changes needed.
+                </li>
+            </ul>
+
+            <h3>Expansion Potential</h3>
+            <div class="callout success">
+                <h4>Beyond Sepsis</h4>
+                <p>
+                    The architecture is denial-type agnostic. Adding support for pneumonia,
+                    CHF, or other clinical validation denials requires:
+                </p>
+                <ul>
+                    <li>Adding relevant Propel documentation to propel_data/</li>
+                    <li>Adding denial-type-specific gold letters</li>
+                    <li>Updating scope filter configuration</li>
+                </ul>
+                <p>
+                    No architectural changes needed - the same pipeline handles any denial type.
+                </p>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>Sepsis Rebuttal Engine | Mercy Hospital | Financial Data Science Team</p>
+        <p>Executive Overview | January 2026</p>
+    </footer>
+
+    <script>
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>
