@@ -1,24 +1,29 @@
 -- Test Queries for Sepsis Rebuttal Engine
 -- Run these to validate data in Unity Catalog tables
+-- Updated: Check denial data join worked properly
 
 -- =============================================================================
 -- INFERENCE TABLE VALIDATION (fudgesicle_inference)
 -- =============================================================================
 
--- 1. Basic counts - did data load?
+-- 1. Basic counts - did data load AND did denial join work?
 SELECT
     COUNT(*) as total_rows,
     COUNT(discharge_summary_text) as has_discharge,
     COUNT(hp_note_text) as has_hp,
-    COUNT(denial_embedding) as has_embedding
+    COUNT(denial_letter_text) as has_denial_text,
+    COUNT(denial_letter_filename) as has_denial_filename,
+    COUNT(denial_embedding) as has_embedding,
+    COUNT(payor) as has_payor
 FROM dev.fin_ds.fudgesicle_inference;
 
--- 2. Check the actual data
+-- 2. Check the actual data - KEY VALIDATION
 SELECT
     hsp_account_id,
     formatted_name,
     payor,
     denial_letter_filename,
+    LENGTH(denial_letter_text) as denial_chars,
     LENGTH(discharge_summary_text) as discharge_chars,
     LENGTH(hp_note_text) as hp_chars,
     SIZE(denial_embedding) as embedding_dims
