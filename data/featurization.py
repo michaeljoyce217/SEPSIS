@@ -230,9 +230,10 @@ def generate_embedding(text):
     PARSER: Generate embedding vector for text using Azure OpenAI.
     Returns 1536-dimensional vector.
     """
-    # Truncate if too long (ada-002 limit ~8k tokens, ~30k chars safe)
-    if len(text) > 30000:
-        text = text[:30000]
+    # Truncate if too long (ada-002 limit is 8192 tokens)
+    # Medical text averages ~3-4 chars/token, so 20k chars is safe
+    if len(text) > 20000:
+        text = text[:20000]
 
     response = openai_client.embeddings.create(
         model=EMBEDDING_MODEL,
