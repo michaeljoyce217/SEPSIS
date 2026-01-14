@@ -706,16 +706,22 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
 
     # Use pre-parsed denial data from DENIAL_RESULTS (already has text, embedding, payor)
     print("\nJoining with pre-parsed denial data...")
-    denial_lookup = {r["hsp_account_id"]: r for r in DENIAL_RESULTS if r["hsp_account_id"]}
+
+    # Cast hsp_account_id to string for matching (avoid type mismatch)
+    clinical_df['hsp_account_id'] = clinical_df['hsp_account_id'].astype(str)
+    denial_lookup = {str(r["hsp_account_id"]): r for r in DENIAL_RESULTS if r["hsp_account_id"]}
+
+    print(f"  Clinical IDs: {list(clinical_df['hsp_account_id'].head())}")
+    print(f"  Denial IDs: {list(denial_lookup.keys())[:5]}")
 
     clinical_df['denial_letter_text'] = clinical_df['hsp_account_id'].map(
-        lambda x: denial_lookup.get(x, {}).get('denial_text'))
+        lambda x: denial_lookup.get(str(x), {}).get('denial_text'))
     clinical_df['denial_letter_filename'] = clinical_df['hsp_account_id'].map(
-        lambda x: denial_lookup.get(x, {}).get('filename'))
+        lambda x: denial_lookup.get(str(x), {}).get('filename'))
     clinical_df['denial_embedding'] = clinical_df['hsp_account_id'].map(
-        lambda x: denial_lookup.get(x, {}).get('denial_embedding'))
+        lambda x: denial_lookup.get(str(x), {}).get('denial_embedding'))
     clinical_df['payor'] = clinical_df['hsp_account_id'].map(
-        lambda x: denial_lookup.get(x, {}).get('payor'))
+        lambda x: denial_lookup.get(str(x), {}).get('payor'))
     clinical_df['scope_filter'] = SCOPE_FILTER
     clinical_df['featurization_timestamp'] = datetime.now().isoformat()
 
