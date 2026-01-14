@@ -2,8 +2,8 @@
 # Rebuttal Engine v2 - Inference (Letter Generation)
 #
 # PIPELINE OVERVIEW:
-# 1. Parse denial letter → Extract structured info (DRG, payor, denial reasons)
-# 2. Vector search → Find most similar past denial from gold letters
+# 1. Parse denial letter → Extract structured info via LLM (DRG, payor, denial reasons)
+# 2. Vector search → Compare pre-computed embeddings (apples-to-apples)
 # 3. Generate rebuttal → Use winning rebuttal as template, clinical notes as evidence
 # 4. Output → DOCX files for POC, Delta table for production
 #
@@ -11,6 +11,12 @@
 # We match new denials to PAST denials (not rebuttals) because denial letters
 # from the same payor with similar arguments tend to need similar rebuttals.
 # The gold letter's winning rebuttal becomes our "template to learn from."
+#
+# RIGOROUS ARCHITECTURE:
+# Both new denials AND gold letter denials are embedded using the SAME
+# generate_embedding() function in featurization.py. The denial_embedding
+# column in the inference table is pre-computed, ensuring true apples-to-apples
+# comparison with gold letter embeddings.
 #
 # Run on Databricks Runtime 15.4 LTS ML
 
@@ -86,8 +92,9 @@ azure_endpoint = dbutils.secrets.get(scope='idp_etl', key='az-openai-base')
 api_version = '2024-10-21'
 
 # Model names deployed in our Azure OpenAI resource
-model = 'gpt-4.1'                    # For parsing and letter generation
-embedding_model = 'text-embedding-ada-002'  # For vector search (1536 dims)
+model = 'gpt-4.1'                    # For parsing denial info and letter generation
+# NOTE: Embedding generation moved to featurization.py for rigorous architecture.
+# The denial_embedding is pre-computed using text-embedding-ada-002 (1536 dims).
 
 # Initialize the client
 client = AzureOpenAI(api_key=api_key, azure_endpoint=azure_endpoint, api_version=api_version)
@@ -442,54 +449,63 @@ else:
         # ---------------------------------------------------------------------
         # STEP 3: Vector search for best matching gold letter
         # ---------------------------------------------------------------------
-        # We want to find the past denial most similar to this new denial.
-        # The winning rebuttal from that case becomes our template.
+        # RIGOROUS ARCHITECTURE:
+        # The denial_embedding was pre-computed in featurization.py using the
+        # SAME generate_embedding() function as gold letters. This ensures
+        # apples-to-apples comparison (no embedding generation here).
         print("  Step 2: Finding similar gold standard letter...")
 
         gold_letter = None        # Will hold the best match (if found)
         gold_letter_score = 0.0   # Cosine similarity score
 
         if gold_letters_cache:
-            # Generate embedding for this new denial
-            embed_text = denial_text[:30000] if len(denial_text) > 30000 else denial_text
-            embed_response = client.embeddings.create(
-                model=embedding_model,
-                input=embed_text
-            )
-            query_embedding = embed_response.data[0].embedding  # 1536 dimensions
+            # Get pre-computed embedding from inference table (computed in featurization.py)
+            query_embedding = row.get("denial_embedding")
 
-            # Compare against all gold letters using cosine similarity
-            best_score = 0.0
-            best_match = None
-
-            for letter in gold_letters_cache:
-                if letter["denial_embedding"]:
-                    # Cosine similarity = dot(a,b) / (||a|| * ||b||)
-                    vec1 = query_embedding
-                    vec2 = letter["denial_embedding"]
-
-                    # Dot product
-                    dot_product = sum(a * b for a, b in zip(vec1, vec2))
-
-                    # Vector norms (magnitudes)
-                    norm1 = math.sqrt(sum(a * a for a in vec1))
-                    norm2 = math.sqrt(sum(b * b for b in vec2))
-
-                    # Cosine similarity (avoid div by zero)
-                    if norm1 > 0 and norm2 > 0:
-                        similarity = dot_product / (norm1 * norm2)
-                        if similarity > best_score:
-                            best_score = similarity
-                            best_match = letter
-
-            gold_letter_score = best_score
-
-            # Only use the match if it meets our quality threshold
-            if best_match and best_score >= MATCH_SCORE_THRESHOLD:
-                gold_letter = best_match
-                print(f"  Found match: {gold_letter['source_file']} | Payor: {gold_letter.get('payor', 'Unknown')} | Score: {best_score:.3f}")
+            if query_embedding is None:
+                print("  WARNING: No denial_embedding in inference table - skipping vector search")
+                print("  (Re-run featurization.py to compute embeddings)")
             else:
-                print(f"  No good match (best score: {best_score:.3f}, threshold: {MATCH_SCORE_THRESHOLD})")
+                # Convert to list if it's a Spark array
+                if hasattr(query_embedding, 'tolist'):
+                    query_embedding = query_embedding.tolist()
+                elif not isinstance(query_embedding, list):
+                    query_embedding = list(query_embedding)
+
+                print(f"  Using pre-computed embedding ({len(query_embedding)} dims)")
+
+                # Compare against all gold letters using cosine similarity
+                best_score = 0.0
+                best_match = None
+
+                for letter in gold_letters_cache:
+                    if letter["denial_embedding"]:
+                        # Cosine similarity = dot(a,b) / (||a|| * ||b||)
+                        vec1 = query_embedding
+                        vec2 = letter["denial_embedding"]
+
+                        # Dot product
+                        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+
+                        # Vector norms (magnitudes)
+                        norm1 = math.sqrt(sum(a * a for a in vec1))
+                        norm2 = math.sqrt(sum(b * b for b in vec2))
+
+                        # Cosine similarity (avoid div by zero)
+                        if norm1 > 0 and norm2 > 0:
+                            similarity = dot_product / (norm1 * norm2)
+                            if similarity > best_score:
+                                best_score = similarity
+                                best_match = letter
+
+                gold_letter_score = best_score
+
+                # Only use the match if it meets our quality threshold
+                if best_match and best_score >= MATCH_SCORE_THRESHOLD:
+                    gold_letter = best_match
+                    print(f"  Found match: {gold_letter['source_file']} | Payor: {gold_letter.get('payor', 'Unknown')} | Score: {best_score:.3f}")
+                else:
+                    print(f"  No good match (best score: {best_score:.3f}, threshold: {MATCH_SCORE_THRESHOLD})")
 
         else:
             print("  No gold letters loaded - using template only")
