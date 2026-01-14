@@ -117,52 +117,71 @@ def extract_text_from_pdf(file_path):
 def identify_denial_start(pages_text):
     """
     PARSER: Identify which page the denial letter starts on.
-    Looks for insurance company letterhead (payor address is dead giveaway).
+
+    KEY: Look for insurance company name in LETTERHEAD POSITION (first 5 lines),
+    not just anywhere on the page. The rebuttal mentions insurance companies
+    in the body text, but only the denial has them in letterhead position.
+
     Returns (denial_start_page, payor_name) - 1-indexed page number.
     """
-    # Common insurance company indicators
-    insurance_indicators = [
-        "unitedhealth", "united health", "uhc",
-        "aetna", "cigna", "humana", "anthem",
-        "blue cross", "blue shield", "bcbs",
-        "medicare", "medicaid", "cms",
-        "denial", "determination", "we have reviewed",
-        "claim has been denied", "does not meet"
+    # Insurance company names to look for in LETTERHEAD (first few lines only)
+    payor_patterns = [
+        ("unitedhealth", "UnitedHealthcare"),
+        ("united health", "UnitedHealthcare"),
+        ("uhc", "UnitedHealthcare"),
+        ("optum", "UnitedHealthcare"),  # UHC subsidiary
+        ("aetna", "Aetna"),
+        ("cigna", "Cigna"),
+        ("evernorth", "Cigna"),  # Cigna subsidiary
+        ("humana", "Humana"),
+        ("anthem", "Anthem"),
+        ("elevance", "Anthem"),  # Anthem's parent company
+        ("blue cross", "Blue Cross Blue Shield"),
+        ("blue shield", "Blue Cross Blue Shield"),
+        ("bcbs", "Blue Cross Blue Shield"),
+        ("wellpoint", "Anthem"),
+        ("kaiser", "Kaiser Permanente"),
+        ("molina", "Molina Healthcare"),
+        ("centene", "Centene"),
+        ("ambetter", "Centene"),
+        ("wellcare", "Centene"),
+        ("healthnet", "Health Net"),
     ]
 
     for i, page_text in enumerate(pages_text):
-        page_lower = page_text.lower()
-        # Check if this page looks like an insurance letter (not hospital letter)
-        for indicator in insurance_indicators:
-            if indicator in page_lower:
-                # Try to extract payor name from first few lines
-                first_lines = page_text.split("\n")[:10]
-                payor = "Unknown"
-                for line in first_lines:
-                    line_lower = line.lower()
-                    if any(p in line_lower for p in ["unitedhealth", "uhc"]):
-                        payor = "UnitedHealthcare"
-                        break
-                    elif "aetna" in line_lower:
-                        payor = "Aetna"
-                        break
-                    elif "cigna" in line_lower:
-                        payor = "Cigna"
-                        break
-                    elif "humana" in line_lower:
-                        payor = "Humana"
-                        break
-                    elif "anthem" in line_lower:
-                        payor = "Anthem"
-                        break
-                    elif "blue cross" in line_lower or "bcbs" in line_lower:
-                        payor = "Blue Cross Blue Shield"
-                        break
+        # Only check FIRST 5 LINES for letterhead (not entire page)
+        first_lines = page_text.split("\n")[:5]
+        header_text = "\n".join(first_lines).lower()
 
-                return i + 1, payor  # 1-indexed
+        # Check if insurance company name appears in letterhead position
+        for pattern, payor_name in payor_patterns:
+            if pattern in header_text:
+                print(f"    Found '{pattern}' in letterhead on page {i+1}")
+                return i + 1, payor_name  # 1-indexed
 
-    # Default: assume denial starts on last page
-    return len(pages_text), "Unknown"
+    # Fallback: look for typical denial letter phrases in first 10 lines
+    # (but NOT "denial" alone - too common in rebuttals)
+    denial_start_phrases = [
+        "claim review determination",
+        "medical necessity review",
+        "utilization review determination",
+        "peer review determination",
+        "appeal determination",
+        "reconsideration decision",
+    ]
+
+    for i, page_text in enumerate(pages_text):
+        first_lines = page_text.split("\n")[:10]
+        header_text = "\n".join(first_lines).lower()
+
+        for phrase in denial_start_phrases:
+            if phrase in header_text:
+                print(f"    Found '{phrase}' on page {i+1}")
+                return i + 1, "Unknown"
+
+    # Default: assume denial starts after last page (no denial found)
+    print("    WARNING: Could not identify denial start page")
+    return len(pages_text) + 1, "Unknown"
 
 
 def generate_embedding(text):
