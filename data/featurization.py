@@ -578,14 +578,15 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     print("="*60)
 
     account_ids = [a[0] for a in TARGET_ACCOUNTS]
-    account_list = ",".join(f"'{a}'" for a in account_ids)
+    account_values = ", ".join([f"('{acc}')" for acc in account_ids])
 
     # Query clinical data from Clarity
-    # Based on original working query structure with ip_note_type filtering
+    # Based on original working prototype query structure
     print("\nQuerying clinical data...")
     clinical_query = f"""
     WITH target_accounts AS (
-        SELECT explode(array({account_list})) AS hsp_account_id
+        SELECT hsp_account_id
+        FROM (VALUES {account_values}) AS t(hsp_account_id)
     ),
 
     -- Get notes using ip_note_type (original working approach)
