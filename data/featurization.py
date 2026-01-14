@@ -422,7 +422,7 @@ if RUN_GOLD_INGESTION:
         ])
 
         gold_df = spark.createDataFrame(gold_records, schema)
-        gold_df.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(GOLD_LETTERS_TABLE)
+        gold_df.write.format("delta").mode("overwrite").saveAsTable(GOLD_LETTERS_TABLE)
         print(f"Wrote {len(gold_records)} records to {GOLD_LETTERS_TABLE}")
 
     count = spark.sql(f"SELECT COUNT(*) as cnt FROM {GOLD_LETTERS_TABLE}").collect()[0]["cnt"]
@@ -733,7 +733,7 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     if WRITE_TO_TABLE:
         spark_df = spark.createDataFrame(clinical_df)
         spark_df = spark_df.withColumn("insert_tsp", current_timestamp())
-        spark_df.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(INFERENCE_TABLE)
+        spark_df.write.format("delta").mode("overwrite").saveAsTable(INFERENCE_TABLE)
         print(f"Wrote {len(clinical_df)} rows to {INFERENCE_TABLE}")
     else:
         print("To write, set WRITE_TO_TABLE = True")
