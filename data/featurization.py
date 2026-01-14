@@ -1,23 +1,17 @@
 # data/featurization.py
-# Rebuttal Engine v2 - Featurization (Data Gathering)
+# Rebuttal Engine v2 - Featurization
 #
-# This notebook handles TWO data pipelines:
-# 1. Gold Standard Letters: Ingest past winning rebuttals for vector search
-# 2. New Denials: Pull clinical data for accounts needing rebuttals
+# PARSER AGENT lives here - same parsing logic for:
+# 1. Gold Standard Letters: Extract denial text + embedding
+# 2. New Denials: Extract denial text + embedding
 #
-# WHY TWO PIPELINES?
-# - Gold letters are ingested ONCE (or when new ones arrive)
-# - New denials are processed regularly as they come from the workqueue
+# This ensures apples-to-apples comparison in inference.py
 #
 # Run on Databricks Runtime 15.4 LTS ML
 
 # =============================================================================
 # CELL 1: Install Dependencies (run once per cluster)
 # =============================================================================
-# These packages are not pre-installed on Databricks ML runtime:
-# - azure-ai-documentintelligence: PDF text extraction via Azure AI
-# - openai: Azure OpenAI API client
-#
 # %pip install azure-ai-documentintelligence==1.0.2 openai
 # dbutils.library.restartPython()
 
@@ -32,59 +26,38 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_timestamp, lit
 from pyspark.sql.types import (
     StructType, StructField, StringType, ArrayType, FloatType,
-    TimestampType, MapType
+    TimestampType, MapType, IntegerType
 )
 
-# Get or create Spark session (already exists in Databricks notebooks)
 spark = SparkSession.builder.getOrCreate()
 
-# -----------------------------------------------------------------------------
 # Configuration
-# -----------------------------------------------------------------------------
-# SCOPE_FILTER controls which cases we process:
-# - "sepsis": Only process sepsis-related denials (DRG 870/871/872)
-# - "all": Process all denial types (future expansion)
 SCOPE_FILTER = "sepsis"
-
-# DRG codes for sepsis:
-# - 870: Sepsis with MV >96 hours (most severe)
-# - 871: Sepsis without MV >96 hours (severe)
-# - 872: Sepsis without MCC (less severe)
 SEPSIS_DRG_CODES = ["870", "871", "872"]
+EMBEDDING_MODEL = "text-embedding-ada-002"  # 1536 dimensions
 
 # =============================================================================
 # CELL 3: Environment Setup
 # =============================================================================
-# Determine which Unity Catalog to use based on environment variable.
-# Default to 'dev' if not set, but USE 'prod' catalog for dev
-# (this is intentional - dev environment reads from prod data)
 trgt_cat = os.environ.get('trgt_cat', 'dev')
 if trgt_cat == 'dev':
     spark.sql('USE CATALOG prod;')
 else:
     spark.sql(f'USE CATALOG {trgt_cat};')
 
-# Table names follow convention: {catalog}.fin_ds.fudgesicle_{purpose}
-# "fudgesicle" is the internal codename for this project
+# Table names
 GOLD_LETTERS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_gold_letters"
 INFERENCE_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_inference"
 
-# Paths to source files - UPDATE THESE for your Databricks workspace
-# These should point to your Repos folder or DBFS location
+# Paths - UPDATE THESE
 GOLD_LETTERS_PATH = "/Workspace/Repos/your_user/fudgsicle/utils/gold_standard_rebuttals"
 DENIAL_LETTERS_PATH = "/Workspace/Repos/your_user/fudgsicle/utils/Sample_Denial_Letters"
 
 print(f"Catalog: {trgt_cat}")
-print(f"Gold letters path: {GOLD_LETTERS_PATH}")
 
 # =============================================================================
 # CELL 4: Azure Credentials
 # =============================================================================
-# All secrets are stored in Databricks secret scope 'idp_etl'.
-# These credentials are managed by the platform team.
-#
-# UPDATE THESE KEY NAMES if different in your environment:
-# To list available secrets: dbutils.secrets.list(scope='idp_etl')
 AZURE_OPENAI_KEY = dbutils.secrets.get(scope='idp_etl', key='az-openai-key1')
 AZURE_OPENAI_ENDPOINT = dbutils.secrets.get(scope='idp_etl', key='az-openai-base')
 AZURE_DOC_INTEL_KEY = dbutils.secrets.get(scope='idp_etl', key='az-aidcmntintel-key1')
@@ -93,88 +66,182 @@ AZURE_DOC_INTEL_ENDPOINT = dbutils.secrets.get(scope='idp_etl', key='az-aidcmnti
 print("Credentials loaded")
 
 # =============================================================================
-# CELL 5: Initialize Clients and Document Reading Functions
+# CELL 5: Initialize Clients
 # =============================================================================
 from openai import AzureOpenAI
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 from azure.core.credentials import AzureKeyCredential
 
-# Azure OpenAI client - used for:
-# - Splitting combined PDF into rebuttal + denial sections
-# - Generating embeddings for vector search
 openai_client = AzureOpenAI(
     api_key=AZURE_OPENAI_KEY,
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
-    api_version="2024-10-21"  # Latest stable API version
+    api_version="2024-10-21"
 )
 
-# Document Intelligence client - used for:
-# - Extracting text from PDF files (denial letters, gold standard letters)
-# - Uses "prebuilt-read" model which handles various document layouts
 doc_intel_client = DocumentIntelligenceClient(
     endpoint=AZURE_DOC_INTEL_ENDPOINT,
     credential=AzureKeyCredential(AZURE_DOC_INTEL_KEY)
 )
 
-def read_pdf_by_page(file_path):
-    """Read PDF and return text separated by page using Document Intelligence layout model"""
-    try:
-        with open(file_path, 'rb') as f:
-            document_bytes = f.read()
-
-        # Use prebuilt-layout for better structure extraction
-        poller = doc_intel_client.begin_analyze_document(
-            model_id="prebuilt-layout",
-            body=AnalyzeDocumentRequest(bytes_source=document_bytes),
-        )
-        result = poller.result()
-
-        # Extract text page by page - useful for splitting documents
-        pages_text = []
-        for page in result.pages:
-            page_lines = []
-            for line in page.lines:
-                page_lines.append(line.content)
-            pages_text.append("\n".join(page_lines))
-
-        return pages_text  # List of strings, one per page
-    except Exception as e:
-        print(f"Error reading PDF {file_path}: {e}")
-        return [f"Error reading PDF: {e}"]
-
-def read_pdf(file_path):
-    """Read PDF and return full text using Document Intelligence layout model"""
-    pages = read_pdf_by_page(file_path)
-    return "\n\n=== PAGE BREAK ===\n\n".join(pages)
-
-def read_document(file_path):
-    """Read text from PDF or TXT based on extension"""
-    if file_path.lower().endswith('.pdf'):
-        return read_pdf(file_path)
-    elif file_path.lower().endswith('.txt'):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    else:
-        return f"Unsupported file format: {file_path}"
-
-print("Azure OpenAI and Document Intelligence clients initialized")
+print("Clients initialized")
 
 # =============================================================================
-# CELL 6: Create Gold Letters Table (run once)
+# CELL 6: PARSER AGENT - Core Functions
 # =============================================================================
-# This table stores past winning rebuttal letters with their embeddings.
-# The embeddings enable vector search to find similar denials.
-#
-# Schema:
-# - letter_id: UUID for each gold letter
-# - source_file: Original PDF filename for traceability
-# - payor: Insurance company (extracted during ingestion)
-# - denial_text: The original denial letter that was rebutted
-# - rebuttal_text: The winning rebuttal letter (what we learn from)
-# - denial_embedding: 1536-dim vector from text-embedding-ada-002
-# - created_at: When this record was ingested
-# - metadata: Additional info like split confidence
+# These functions are used for BOTH gold letters and new denials
+# to ensure consistent parsing and embedding
+
+def extract_text_from_pdf(file_path):
+    """
+    PARSER: Extract text from PDF using Document Intelligence layout model.
+    Returns list of strings, one per page.
+    """
+    with open(file_path, 'rb') as f:
+        document_bytes = f.read()
+
+    poller = doc_intel_client.begin_analyze_document(
+        model_id="prebuilt-layout",
+        body=AnalyzeDocumentRequest(bytes_source=document_bytes),
+    )
+    result = poller.result()
+
+    pages_text = []
+    for page in result.pages:
+        page_lines = [line.content for line in page.lines]
+        pages_text.append("\n".join(page_lines))
+
+    return pages_text
+
+
+def identify_denial_start(pages_text):
+    """
+    PARSER: Identify which page the denial letter starts on.
+    Looks for insurance company letterhead (payor address is dead giveaway).
+    Returns (denial_start_page, payor_name) - 1-indexed page number.
+    """
+    # Common insurance company indicators
+    insurance_indicators = [
+        "unitedhealth", "united health", "uhc",
+        "aetna", "cigna", "humana", "anthem",
+        "blue cross", "blue shield", "bcbs",
+        "medicare", "medicaid", "cms",
+        "denial", "determination", "we have reviewed",
+        "claim has been denied", "does not meet"
+    ]
+
+    for i, page_text in enumerate(pages_text):
+        page_lower = page_text.lower()
+        # Check if this page looks like an insurance letter (not hospital letter)
+        for indicator in insurance_indicators:
+            if indicator in page_lower:
+                # Try to extract payor name from first few lines
+                first_lines = page_text.split("\n")[:10]
+                payor = "Unknown"
+                for line in first_lines:
+                    line_lower = line.lower()
+                    if any(p in line_lower for p in ["unitedhealth", "uhc"]):
+                        payor = "UnitedHealthcare"
+                        break
+                    elif "aetna" in line_lower:
+                        payor = "Aetna"
+                        break
+                    elif "cigna" in line_lower:
+                        payor = "Cigna"
+                        break
+                    elif "humana" in line_lower:
+                        payor = "Humana"
+                        break
+                    elif "anthem" in line_lower:
+                        payor = "Anthem"
+                        break
+                    elif "blue cross" in line_lower or "bcbs" in line_lower:
+                        payor = "Blue Cross Blue Shield"
+                        break
+
+                return i + 1, payor  # 1-indexed
+
+    # Default: assume denial starts on last page
+    return len(pages_text), "Unknown"
+
+
+def generate_embedding(text):
+    """
+    PARSER: Generate embedding vector for text using Azure OpenAI.
+    Returns 1536-dimensional vector.
+    """
+    # Truncate if too long (ada-002 limit ~8k tokens, ~30k chars safe)
+    if len(text) > 30000:
+        text = text[:30000]
+
+    response = openai_client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=text
+    )
+    return response.data[0].embedding
+
+
+def parse_denial_pdf(file_path):
+    """
+    PARSER: Full parsing pipeline for a denial letter PDF.
+    Returns dict with: denial_text, denial_embedding, payor
+    """
+    # Step 1: Extract text by page
+    pages = extract_text_from_pdf(file_path)
+    full_text = "\n\n".join(pages)
+
+    # Step 2: Generate embedding of the denial
+    embedding = generate_embedding(full_text)
+
+    # Step 3: Try to identify payor from text
+    _, payor = identify_denial_start(pages)
+
+    return {
+        "denial_text": full_text,
+        "denial_embedding": embedding,
+        "payor": payor,
+        "page_count": len(pages)
+    }
+
+
+def parse_gold_letter_pdf(file_path):
+    """
+    PARSER: Full parsing pipeline for a gold standard letter PDF.
+    Gold letters contain BOTH rebuttal (first) and denial (end).
+    Returns dict with: rebuttal_text, denial_text, denial_embedding, payor
+    """
+    # Step 1: Extract text by page
+    pages = extract_text_from_pdf(file_path)
+
+    # Step 2: Identify where denial starts (payor letterhead is giveaway)
+    denial_start_page, payor = identify_denial_start(pages)
+
+    # Step 3: Split into rebuttal and denial
+    rebuttal_pages = pages[:denial_start_page - 1]
+    denial_pages = pages[denial_start_page - 1:]
+
+    rebuttal_text = "\n\n".join(rebuttal_pages) if rebuttal_pages else ""
+    denial_text = "\n\n".join(denial_pages) if denial_pages else ""
+
+    # Step 4: Generate embedding of the DENIAL (for matching)
+    denial_embedding = generate_embedding(denial_text) if denial_text else None
+
+    return {
+        "rebuttal_text": rebuttal_text,
+        "denial_text": denial_text,
+        "denial_embedding": denial_embedding,
+        "payor": payor,
+        "denial_start_page": denial_start_page,
+        "total_pages": len(pages)
+    }
+
+
+print("Parser Agent functions loaded")
+
+# =============================================================================
+# CELL 7: Create Tables
+# =============================================================================
+# Gold Letters Table - stores past winning rebuttals with denial embeddings
 create_gold_table_sql = f"""
 CREATE TABLE IF NOT EXISTS {GOLD_LETTERS_TABLE} (
     letter_id STRING NOT NULL,
@@ -187,23 +254,11 @@ CREATE TABLE IF NOT EXISTS {GOLD_LETTERS_TABLE} (
     metadata MAP<STRING, STRING>
 )
 USING DELTA
-COMMENT 'Gold standard rebuttal letters with embeddings for vector search'
 """
-
 spark.sql(create_gold_table_sql)
 print(f"Table {GOLD_LETTERS_TABLE} ready")
 
-# =============================================================================
-# CELL 7: Create Inference Table (run once)
-# =============================================================================
-# This table holds the input data for rebuttal generation.
-# Each row represents one denial case that needs a rebuttal letter.
-#
-# Data comes from two sources:
-# 1. Clarity (Epic EMR): Patient demographics, clinical notes, diagnosis codes
-# 2. Denial letter files: The actual denial letter text
-#
-# The inference.py script reads from this table to generate rebuttals.
+# Inference Table - includes denial_embedding for rigorous comparison
 create_inference_table_sql = f"""
 CREATE TABLE IF NOT EXISTS {INFERENCE_TABLE} (
     hsp_account_id STRING,
@@ -227,193 +282,74 @@ CREATE TABLE IF NOT EXISTS {INFERENCE_TABLE} (
     hp_note_text STRING,
     denial_letter_text STRING,
     denial_letter_filename STRING,
+    denial_embedding ARRAY<FLOAT>,
+    payor STRING,
     scope_filter STRING,
     featurization_timestamp STRING,
     insert_tsp TIMESTAMP
 )
 USING DELTA
-COMMENT 'Input data for rebuttal letter generation'
 """
-
 spark.sql(create_inference_table_sql)
 print(f"Table {INFERENCE_TABLE} ready")
 
 # #############################################################################
 # PART 1: GOLD STANDARD LETTER INGESTION
-# Run this section when you have new gold standard letters to ingest.
-#
-# BACKGROUND:
-# The gold standard letters are past rebuttals that WON their appeals.
-# Each PDF contains BOTH the winning rebuttal AND the original denial
-# (the denial is tacked onto the end of the document).
-#
-# PROCESS:
-# 1. Read PDF with PyPDF2
-# 2. Use LLM to split into rebuttal vs denial sections
-# 3. Generate embedding of the denial (for matching new denials later)
-# 4. Store everything in Delta table
+# Parser extracts: rebuttal_text, denial_text, denial_embedding, payor
 # #############################################################################
 
 # =============================================================================
-# CELL 8: LLM Prompt for Splitting Rebuttal from Denial
+# CELL 8: Process Gold Standard Letters
 # =============================================================================
-# This prompt instructs GPT-4.1 to separate the combined document.
-# The model identifies the "split point" between the two letters
-# based on typical business letter markers (letterhead, dates, tone).
-#
-# Output is JSON with:
-# - rebuttal_text: The winning appeal letter
-# - denial_text: The original denial being rebutted
-# - payor: Insurance company name (for filtering/reporting)
-# - split_confidence: How confident the model is (0.0-1.0)
-# - split_reasoning: Explanation of how it found the split
-# Prompt to identify where the denial letter starts (page number)
-SPLIT_PROMPT = """This document contains TWO business letters:
-1. FIRST: A hospital's rebuttal/appeal letter
-2. SECOND: The original insurance denial letter (tacked on at the end)
-
-The pages are separated by "=== PAGE BREAK ===".
-
-{document_text}
-
-Answer these questions (one per line):
-1. DENIAL_STARTS_PAGE: Which page number does the denial letter START on? (1-indexed)
-2. PAYOR: What is the insurance company name from the denial letter?
-3. CONFIDENCE: How confident are you? (high/medium/low)
-
-Format your response EXACTLY like this (no other text):
-DENIAL_STARTS_PAGE: [number]
-PAYOR: [company name]
-CONFIDENCE: [high/medium/low]"""
-
-# =============================================================================
-# CELL 9: Process Gold Standard Letters
-# =============================================================================
-# Set RUN_GOLD_INGESTION = True when you have new gold letters to ingest.
-# This is typically run once initially, then again only when new letters arrive.
 RUN_GOLD_INGESTION = False
 
 if RUN_GOLD_INGESTION:
     print("="*60)
-    print("GOLD STANDARD LETTER INGESTION")
+    print("GOLD STANDARD LETTER INGESTION (Parser Agent)")
     print("="*60)
 
-    # Find all PDF files in the gold letters directory
     pdf_files = [f for f in os.listdir(GOLD_LETTERS_PATH) if f.lower().endswith('.pdf')]
     print(f"Found {len(pdf_files)} PDF files")
 
-    # Will collect all successfully processed records here
     gold_records = []
 
-    # Process each PDF file one at a time
     for i, pdf_file in enumerate(pdf_files):
         print(f"\nProcessing {i+1}/{len(pdf_files)}: {pdf_file}")
         file_path = os.path.join(GOLD_LETTERS_PATH, pdf_file)
 
-        # ---------------------------------------------------------------------
-        # Step 1: Extract text from PDF using Document Intelligence (by page)
-        # ---------------------------------------------------------------------
-        print("  Reading PDF...")
-        pages = read_pdf_by_page(file_path)
-        print(f"  Extracted {len(pages)} pages")
+        try:
+            # Use Parser Agent to extract everything
+            parsed = parse_gold_letter_pdf(file_path)
 
-        # Combine pages with markers for LLM
-        full_text = "\n\n=== PAGE BREAK ===\n\n".join(pages)
+            print(f"  Pages: {parsed['total_pages']}, Denial starts: page {parsed['denial_start_page']}")
+            print(f"  Rebuttal: {len(parsed['rebuttal_text'])} chars")
+            print(f"  Denial: {len(parsed['denial_text'])} chars")
+            print(f"  Payor: {parsed['payor']}")
+            print(f"  Embedding: {len(parsed['denial_embedding'])} dims")
 
-        # ---------------------------------------------------------------------
-        # Step 2: Ask LLM which page the denial starts on
-        # ---------------------------------------------------------------------
-        print("  Identifying split point...")
-        response = openai_client.chat.completions.create(
-            model="gpt-4.1",
-            messages=[
-                {"role": "system", "content": "Identify document structure. Be precise."},
-                {"role": "user", "content": SPLIT_PROMPT.format(document_text=full_text)}
-            ],
-            temperature=0,
-            max_tokens=100  # Only need a few lines back
-        )
+            record = {
+                "letter_id": str(uuid.uuid4()),
+                "source_file": pdf_file,
+                "payor": parsed["payor"],
+                "denial_text": parsed["denial_text"],
+                "rebuttal_text": parsed["rebuttal_text"],
+                "denial_embedding": parsed["denial_embedding"],
+                "created_at": datetime.now(),
+                "metadata": {
+                    "denial_start_page": str(parsed["denial_start_page"]),
+                    "total_pages": str(parsed["total_pages"])
+                },
+            }
+            gold_records.append(record)
+            print(f"  Record created: {record['letter_id']}")
 
-        # Parse simple text response (not JSON)
-        raw_response = response.choices[0].message.content.strip()
-        print(f"  LLM response: {raw_response}")
-
-        # Extract values from response
-        denial_start_page = 1
-        payor = "Unknown"
-        split_confidence = "low"
-
-        for line in raw_response.split("\n"):
-            line = line.strip()
-            if line.startswith("DENIAL_STARTS_PAGE:"):
-                try:
-                    denial_start_page = int(line.split(":")[1].strip())
-                except:
-                    pass
-            elif line.startswith("PAYOR:"):
-                payor = line.split(":", 1)[1].strip()
-            elif line.startswith("CONFIDENCE:"):
-                split_confidence = line.split(":")[1].strip().lower()
-
-        print(f"  Denial starts on page {denial_start_page}, Payor: {payor}")
-
-        # ---------------------------------------------------------------------
-        # Step 3: Split pages into rebuttal and denial
-        # ---------------------------------------------------------------------
-        # Pages before denial_start_page are rebuttal, rest is denial
-        rebuttal_pages = pages[:denial_start_page - 1]  # 0-indexed, so -1
-        denial_pages = pages[denial_start_page - 1:]    # From denial start to end
-
-        rebuttal_text = "\n\n".join(rebuttal_pages) if rebuttal_pages else ""
-        denial_text = "\n\n".join(denial_pages) if denial_pages else ""
-
-        print(f"  Rebuttal: {len(rebuttal_text)} chars, Denial: {len(denial_text)} chars")
-        print(f"  Payor: {payor}")
-        print(f"  Split confidence: {split_confidence}")
-
-        # ---------------------------------------------------------------------
-        # Step 3: Generate embedding for the denial text
-        # ---------------------------------------------------------------------
-        # We embed the DENIAL (not rebuttal) because when a new denial comes in,
-        # we want to find the most similar PAST denial to match against.
-        # The corresponding rebuttal is what we'll use as a template.
-        print("  Generating embedding...")
-
-        # Truncate if too long (ada-002 has 8191 token limit, ~30k chars safe)
-        embed_text = denial_text[:30000] if len(denial_text) > 30000 else denial_text
-        embed_response = openai_client.embeddings.create(
-            model="text-embedding-ada-002",
-            input=embed_text
-        )
-        denial_embedding = embed_response.data[0].embedding  # 1536 dimensions
-        print(f"  Embedding dimension: {len(denial_embedding)}")
-
-        # ---------------------------------------------------------------------
-        # Step 4: Create record for this gold letter
-        # ---------------------------------------------------------------------
-        record = {
-            "letter_id": str(uuid.uuid4()),  # Unique ID for this letter
-            "source_file": pdf_file,          # Original filename for traceability
-            "payor": payor,                   # Insurance company
-            "denial_text": denial_text,       # Original denial (for reference)
-            "rebuttal_text": rebuttal_text,   # Winning rebuttal (what we learn from)
-            "denial_embedding": denial_embedding,  # Vector for similarity search
-            "created_at": datetime.now(),
-            "metadata": {
-                "split_confidence": split_confidence,
-                "split_reasoning": split_reasoning
-            },
-        }
-        gold_records.append(record)
-        print(f"  Record created: {record['letter_id']}")
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            continue
 
     print(f"\nProcessed {len(gold_records)} gold standard letters")
 
-    # -------------------------------------------------------------------------
-    # Write all records to Delta table
-    # -------------------------------------------------------------------------
     if gold_records:
-        # Define explicit schema to ensure correct data types
         schema = StructType([
             StructField("letter_id", StringType(), False),
             StructField("source_file", StringType(), False),
@@ -425,199 +361,126 @@ if RUN_GOLD_INGESTION:
             StructField("metadata", MapType(StringType(), StringType()), True),
         ])
 
-        # Create DataFrame and append to table
         gold_df = spark.createDataFrame(gold_records, schema)
         gold_df.write.format("delta").mode("append").saveAsTable(GOLD_LETTERS_TABLE)
         print(f"Wrote {len(gold_records)} records to {GOLD_LETTERS_TABLE}")
 
-    # Verify final count
     count = spark.sql(f"SELECT COUNT(*) as cnt FROM {GOLD_LETTERS_TABLE}").collect()[0]["cnt"]
     print(f"Total records in gold letters table: {count}")
 
 else:
-    print("Gold ingestion skipped (set RUN_GOLD_INGESTION = True to run)")
+    print("Gold ingestion skipped (set RUN_GOLD_INGESTION = True)")
 
 # #############################################################################
 # PART 2: NEW DENIAL FEATURIZATION
-# Run this section to prepare new denial cases for inference.
-#
-# BACKGROUND:
-# When a new denial arrives, we need to gather all the data needed to
-# generate a rebuttal. This includes:
-# - Patient demographics (name, DOB)
-# - Clinical notes (discharge summary, H&P)
-# - Diagnosis codes
-# - The denial letter text itself
-#
-# OUTPUT:
-# One row per denial case in the inference table, ready for inference.py
+# Parser extracts: denial_text, denial_embedding, payor
+# Combined with clinical data from Clarity
 # #############################################################################
 
 # =============================================================================
-# CELL 10: Target Accounts Configuration
+# CELL 9: Target Accounts Configuration
 # =============================================================================
-# For POC: Manually specify which accounts to process.
-# In production: This would come from a workqueue table.
-#
-# Format: (HSP_ACCOUNT_ID, denial_letter_filename)
-# - HSP_ACCOUNT_ID: Hospital account ID from Epic (links to Clarity data)
-# - denial_letter_filename: Name of PDF file in DENIAL_LETTERS_PATH
 TARGET_ACCOUNTS = [
-    # UPDATE THESE with your test cases:
-    # ("123456789", "denial_letter_1.pdf"),
-    # ("987654321", "denial_letter_2.pdf"),
+    # ("HSP_ACCOUNT_ID", "denial_letter.pdf"),
 ]
 
-print(f"\nTarget accounts configured: {len(TARGET_ACCOUNTS)}")
+print(f"\nTarget accounts: {len(TARGET_ACCOUNTS)}")
 
 # =============================================================================
-# CELL 11: Clinical Data Query and Denial Processing
+# CELL 10: Process New Denials
 # =============================================================================
-# Set RUN_DENIAL_FEATURIZATION = True when you have accounts to process.
 RUN_DENIAL_FEATURIZATION = False
 
 if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     print("="*60)
-    print("NEW DENIAL FEATURIZATION")
+    print("NEW DENIAL FEATURIZATION (Parser Agent)")
     print("="*60)
 
-    # Build list of account IDs for SQL query
     account_ids = [a[0] for a in TARGET_ACCOUNTS]
     account_list = ",".join(f"'{a}'" for a in account_ids)
 
-    # -------------------------------------------------------------------------
-    # Query clinical data from Clarity (Epic's reporting database)
-    # -------------------------------------------------------------------------
-    # This is a large CTE-based query that joins multiple Clarity tables.
-    # It retrieves everything we need to generate a rebuttal letter.
-    print("\nQuerying clinical data from Clarity...")
-
+    # Query clinical data from Clarity
+    print("\nQuerying clinical data...")
     clinical_query = f"""
-    -- Create temporary list of target accounts
     WITH target_accounts AS (
         SELECT explode(array({account_list})) AS hsp_account_id
     ),
-
-    -- Find the most recent encounter for each account
-    -- (some accounts may have multiple encounters)
     encounters AS (
-        SELECT
-            pe.pat_enc_csn_id,
-            pe.pat_id,
-            pe.hsp_account_id,
-            pe.hosp_admsn_time,
-            pe.hosp_disch_time,
-            ROW_NUMBER() OVER (PARTITION BY pe.hsp_account_id ORDER BY pe.hosp_admsn_time DESC) AS rn
+        SELECT pe.pat_enc_csn_id, pe.pat_id, pe.hsp_account_id,
+               pe.hosp_admsn_time, pe.hosp_disch_time,
+               ROW_NUMBER() OVER (PARTITION BY pe.hsp_account_id ORDER BY pe.hosp_admsn_time DESC) AS rn
         FROM prod.clarity_cur.pat_enc_hsp_har_enh pe
         INNER JOIN target_accounts ta ON pe.hsp_account_id = ta.hsp_account_id
         WHERE pe.hosp_admsn_time IS NOT NULL
     ),
-    latest_encounters AS (
-        SELECT * FROM encounters WHERE rn = 1
-    ),
-
-    -- Get discharge summary notes (note_type_c = 2)
-    -- These summarize the entire hospital stay
+    latest_encounters AS (SELECT * FROM encounters WHERE rn = 1),
     discharge_notes AS (
-        SELECT
-            e.hsp_account_id,
-            hno.note_id AS discharge_note_id,
-            hno.pat_enc_csn_id AS discharge_note_csn_id,
-            CONCAT_WS(' ', COLLECT_LIST(hnt.note_text)) AS discharge_summary_text
+        SELECT e.hsp_account_id,
+               hno.note_id AS discharge_note_id,
+               hno.pat_enc_csn_id AS discharge_note_csn_id,
+               CONCAT_WS(' ', COLLECT_LIST(hnt.note_text)) AS discharge_summary_text
         FROM prod.clarity_cur.hno_info_enh hno
         INNER JOIN latest_encounters e ON hno.pat_enc_csn_id = e.pat_enc_csn_id
         INNER JOIN prod.clarity_cur.hno_note_text_enh hnt ON hno.note_id = hnt.note_id
         WHERE hno.note_type_c = 2
         GROUP BY e.hsp_account_id, hno.note_id, hno.pat_enc_csn_id
     ),
-
-    -- Get H&P (History & Physical) notes (note_type_c = 1)
-    -- These document initial presentation and findings
     hp_notes AS (
-        SELECT
-            e.hsp_account_id,
-            hno.note_id AS hp_note_id,
-            hno.pat_enc_csn_id AS hp_note_csn_id,
-            CONCAT_WS(' ', COLLECT_LIST(hnt.note_text)) AS hp_note_text
+        SELECT e.hsp_account_id,
+               hno.note_id AS hp_note_id,
+               hno.pat_enc_csn_id AS hp_note_csn_id,
+               CONCAT_WS(' ', COLLECT_LIST(hnt.note_text)) AS hp_note_text
         FROM prod.clarity_cur.hno_info_enh hno
         INNER JOIN latest_encounters e ON hno.pat_enc_csn_id = e.pat_enc_csn_id
         INNER JOIN prod.clarity_cur.hno_note_text_enh hnt ON hno.note_id = hnt.note_id
         WHERE hno.note_type_c = 1
         GROUP BY e.hsp_account_id, hno.note_id, hno.pat_enc_csn_id
     ),
-
-    -- Get patient demographics
     patient_info AS (
-        SELECT
-            e.hsp_account_id,
-            p.pat_id,
-            p.pat_mrn_id,
-            CONCAT(p.pat_last_name, ', ', p.pat_first_name) AS formatted_name,
-            DATE_FORMAT(p.birth_date, 'MM/dd/yyyy') AS formatted_birthdate
+        SELECT e.hsp_account_id, p.pat_id, p.pat_mrn_id,
+               CONCAT(p.pat_last_name, ', ', p.pat_first_name) AS formatted_name,
+               DATE_FORMAT(p.birth_date, 'MM/dd/yyyy') AS formatted_birthdate
         FROM prod.clarity_cur.patient_enh p
         INNER JOIN latest_encounters e ON p.pat_id = e.pat_id
     ),
-
-    -- Get account/admission info
     account_info AS (
-        SELECT
-            ha.hsp_account_id,
-            ha.prim_enc_csn_id,
-            f.facility_name,
-            DATEDIFF(ha.disch_date_time, ha.adm_date_time) AS number_of_midnights,
-            CONCAT(DATE_FORMAT(ha.adm_date_time, 'MM/dd/yyyy'), ' - ',
-                   DATE_FORMAT(ha.disch_date_time, 'MM/dd/yyyy')) AS formatted_date_of_service
+        SELECT ha.hsp_account_id, f.facility_name,
+               DATEDIFF(ha.disch_date_time, ha.adm_date_time) AS number_of_midnights,
+               CONCAT(DATE_FORMAT(ha.adm_date_time, 'MM/dd/yyyy'), ' - ',
+                      DATE_FORMAT(ha.disch_date_time, 'MM/dd/yyyy')) AS formatted_date_of_service
         FROM prod.clarity_cur.hsp_account_enh ha
         INNER JOIN target_accounts ta ON ha.hsp_account_id = ta.hsp_account_id
         LEFT JOIN prod.clarity.zc_loc_facility f ON ha.loc_id = f.facility_id
     ),
-
-    -- Get claim info (for reference numbers)
     claim_info AS (
-        SELECT
-            hcd.hsp_account_id,
-            FIRST(hcd.claim_number) AS claim_number,
-            FIRST(hcd.tax_id) AS tax_id,
-            FIRST(hcd.npi) AS npi
+        SELECT hcd.hsp_account_id,
+               FIRST(hcd.claim_number) AS claim_number,
+               FIRST(hcd.tax_id) AS tax_id,
+               FIRST(hcd.npi) AS npi
         FROM prod.clarity.hsp_claim_detail hcd
         INNER JOIN target_accounts ta ON hcd.hsp_account_id = ta.hsp_account_id
         GROUP BY hcd.hsp_account_id
     ),
-
-    -- Get primary diagnosis (line 1)
     diagnosis AS (
-        SELECT
-            hadl.hsp_account_id,
-            FIRST(edg.code) AS code,
-            FIRST(edg.dx_name) AS dx_name
+        SELECT hadl.hsp_account_id,
+               FIRST(edg.code) AS code,
+               FIRST(edg.dx_name) AS dx_name
         FROM prod.clarity_cur.hsp_acct_dx_list_enh hadl
         INNER JOIN target_accounts ta ON hadl.hsp_account_id = ta.hsp_account_id
         INNER JOIN prod.clarity_cur.edg_current_icd10_enh edg ON hadl.dx_id = edg.dx_id
-        WHERE hadl.line = 1  -- Primary diagnosis only
+        WHERE hadl.line = 1
         GROUP BY hadl.hsp_account_id
     )
-
-    -- Final SELECT: Join all CTEs together
-    SELECT
-        ta.hsp_account_id,
-        pi.pat_id,
-        pi.pat_mrn_id,
-        pi.formatted_name,
-        pi.formatted_birthdate,
-        ai.facility_name,
-        ai.number_of_midnights,
-        ai.formatted_date_of_service,
-        ci.claim_number,
-        ci.tax_id,
-        ci.npi,
-        d.code,
-        d.dx_name,
-        CAST(dn.discharge_note_id AS STRING) AS discharge_summary_note_id,
-        CAST(dn.discharge_note_csn_id AS STRING) AS discharge_note_csn_id,
-        dn.discharge_summary_text,
-        CAST(hp.hp_note_id AS STRING) AS hp_note_id,
-        CAST(hp.hp_note_csn_id AS STRING) AS hp_note_csn_id,
-        hp.hp_note_text
+    SELECT ta.hsp_account_id, pi.pat_id, pi.pat_mrn_id,
+           pi.formatted_name, pi.formatted_birthdate,
+           ai.facility_name, ai.number_of_midnights, ai.formatted_date_of_service,
+           ci.claim_number, ci.tax_id, ci.npi, d.code, d.dx_name,
+           CAST(dn.discharge_note_id AS STRING) AS discharge_summary_note_id,
+           CAST(dn.discharge_note_csn_id AS STRING) AS discharge_note_csn_id,
+           dn.discharge_summary_text,
+           CAST(hp.hp_note_id AS STRING) AS hp_note_id,
+           CAST(hp.hp_note_csn_id AS STRING) AS hp_note_csn_id,
+           hp.hp_note_text
     FROM target_accounts ta
     LEFT JOIN patient_info pi ON ta.hsp_account_id = pi.hsp_account_id
     LEFT JOIN account_info ai ON ta.hsp_account_id = ai.hsp_account_id
@@ -627,80 +490,78 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     LEFT JOIN hp_notes hp ON ta.hsp_account_id = hp.hsp_account_id
     """
 
-    # Execute query and convert to Pandas for easier manipulation
     clinical_df = spark.sql(clinical_query).toPandas()
-    print(f"Retrieved clinical data for {len(clinical_df)} accounts")
+    print(f"Retrieved {len(clinical_df)} accounts from Clarity")
 
-    # -------------------------------------------------------------------------
-    # Read denial letter files
-    # -------------------------------------------------------------------------
-    # For each account, read the associated denial letter PDF (or txt file).
-    # Store the extracted text in a dictionary keyed by account ID.
-    print("\nReading denial letters...")
-    denial_texts = {}      # Maps account_id -> extracted text
-    filename_map = {}      # Maps account_id -> filename (for traceability)
+    # Parse denial letters with Parser Agent (same as gold letters)
+    print("\nParsing denial letters (Parser Agent)...")
+    parsed_denials = {}
 
     for hsp_account_id, filename in TARGET_ACCOUNTS:
         file_path = os.path.join(DENIAL_LETTERS_PATH, filename)
-        filename_map[hsp_account_id] = filename
+        print(f"  Parsing {filename}...")
 
-        print(f"  Reading {filename}...")
-        denial_texts[hsp_account_id] = read_document(file_path)
-        print(f"    Extracted {len(denial_texts[hsp_account_id])} chars")
+        try:
+            parsed = parse_denial_pdf(file_path)
+            parsed["filename"] = filename
+            parsed_denials[hsp_account_id] = parsed
+            print(f"    Text: {len(parsed['denial_text'])} chars")
+            print(f"    Embedding: {len(parsed['denial_embedding'])} dims")
+            print(f"    Payor: {parsed['payor']}")
+        except Exception as e:
+            print(f"    ERROR: {e}")
+            parsed_denials[hsp_account_id] = {
+                "denial_text": None,
+                "denial_embedding": None,
+                "payor": "Unknown",
+                "filename": filename
+            }
 
-    # -------------------------------------------------------------------------
-    # Add denial text and metadata to clinical data
-    # -------------------------------------------------------------------------
-    clinical_df['denial_letter_text'] = clinical_df['hsp_account_id'].map(denial_texts)
-    clinical_df['denial_letter_filename'] = clinical_df['hsp_account_id'].map(filename_map)
+    # Add parsed denial data to clinical data
+    clinical_df['denial_letter_text'] = clinical_df['hsp_account_id'].map(
+        lambda x: parsed_denials.get(x, {}).get('denial_text'))
+    clinical_df['denial_letter_filename'] = clinical_df['hsp_account_id'].map(
+        lambda x: parsed_denials.get(x, {}).get('filename'))
+    clinical_df['denial_embedding'] = clinical_df['hsp_account_id'].map(
+        lambda x: parsed_denials.get(x, {}).get('denial_embedding'))
+    clinical_df['payor'] = clinical_df['hsp_account_id'].map(
+        lambda x: parsed_denials.get(x, {}).get('payor'))
     clinical_df['scope_filter'] = SCOPE_FILTER
     clinical_df['featurization_timestamp'] = datetime.now().isoformat()
 
-    print(f"\nFeaturized dataset: {len(clinical_df)} rows")
-    print(f"Columns: {list(clinical_df.columns)}")
+    print(f"\nFeaturized {len(clinical_df)} rows with embeddings")
 
-    # Show preview of processed data
-    print("\nPREVIEW:")
-    print(clinical_df[['hsp_account_id', 'formatted_name', 'denial_letter_filename']].to_string())
-
-    # -------------------------------------------------------------------------
-    # Write to Delta table
-    # -------------------------------------------------------------------------
-    # Set WRITE_TO_TABLE = True when ready to persist data
+    # Write to table
     WRITE_TO_TABLE = False
 
     if WRITE_TO_TABLE:
         spark_df = spark.createDataFrame(clinical_df)
         spark_df = spark_df.withColumn("insert_tsp", current_timestamp())
         spark_df.write.mode("append").saveAsTable(INFERENCE_TABLE)
-        print(f"\nWrote {len(clinical_df)} rows to {INFERENCE_TABLE}")
+        print(f"Wrote {len(clinical_df)} rows to {INFERENCE_TABLE}")
     else:
-        print("\nTo write to table, set WRITE_TO_TABLE = True")
+        print("To write, set WRITE_TO_TABLE = True")
 
 else:
-    if len(TARGET_ACCOUNTS) == 0:
-        print("\nNo target accounts configured. Update TARGET_ACCOUNTS list.")
-    else:
-        print("\nDenial featurization skipped (set RUN_DENIAL_FEATURIZATION = True)")
+    print("Denial featurization skipped")
 
 # =============================================================================
-# CELL 12: Verify Tables
+# CELL 11: Verify Tables
 # =============================================================================
-# Quick check of table status - useful for debugging
 print("\n" + "="*60)
 print("TABLE STATUS")
 print("="*60)
 
 try:
     gold_count = spark.sql(f"SELECT COUNT(*) as cnt FROM {GOLD_LETTERS_TABLE}").collect()[0]["cnt"]
-    print(f"Gold letters table: {gold_count} records")
+    print(f"Gold letters: {gold_count} records")
 except Exception as e:
-    print(f"Gold letters table: Error - {e}")
+    print(f"Gold letters: {e}")
 
 try:
-    inference_count = spark.sql(f"SELECT COUNT(*) as cnt FROM {INFERENCE_TABLE}").collect()[0]["cnt"]
-    print(f"Inference table: {inference_count} records")
+    inf_count = spark.sql(f"SELECT COUNT(*) as cnt FROM {INFERENCE_TABLE}").collect()[0]["cnt"]
+    print(f"Inference: {inf_count} records")
 except Exception as e:
-    print(f"Inference table: Error - {e}")
+    print(f"Inference: {e}")
 
 print("\nFeaturization complete.")
