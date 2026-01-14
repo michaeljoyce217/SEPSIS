@@ -285,6 +285,11 @@ Return a JSON object with exactly this structure:
     "split_reasoning": "Brief explanation of how you identified the split point"
 }}
 
+IMPORTANT: Properly escape all special characters in the JSON strings:
+- Use \\n for newlines
+- Use \\" for quotes
+- Use \\\\ for backslashes
+
 Look for indicators like:
 - Change in letterhead/sender (hospital vs insurance company)
 - Change in date
@@ -320,11 +325,17 @@ if RUN_GOLD_INGESTION:
         file_path = os.path.join(GOLD_LETTERS_PATH, pdf_file)
 
         # ---------------------------------------------------------------------
-        # Step 1: Extract text from PDF using PyPDF2
+        # Step 1: Extract text from PDF using Document Intelligence
         # ---------------------------------------------------------------------
         print("  Reading PDF...")
         full_text = read_pdf(file_path)
         print(f"  Extracted {len(full_text)} characters")
+
+        # Truncate if too long to avoid token limits and JSON issues
+        # Gold letters + denials combined should be under 50k chars
+        if len(full_text) > 50000:
+            print(f"  WARNING: Truncating from {len(full_text)} to 50000 chars")
+            full_text = full_text[:50000]
 
         # ---------------------------------------------------------------------
         # Step 2: Use LLM to split document into rebuttal and denial
@@ -339,7 +350,7 @@ if RUN_GOLD_INGESTION:
                 {"role": "user", "content": SPLIT_PROMPT.format(document_text=full_text)}
             ],
             temperature=0.1,  # Low temp for consistent extraction
-            max_tokens=8000   # Letters can be long
+            max_tokens=16000  # Letters can be very long
         )
 
         # Parse LLM response - handle potential markdown code blocks
@@ -350,8 +361,17 @@ if RUN_GOLD_INGESTION:
         elif "```" in json_str:
             json_str = json_str.split("```")[1].split("```")[0].strip()
 
-        # Extract fields from JSON response
-        split_result = json.loads(json_str)
+        # Extract fields from JSON response with error handling
+        try:
+            split_result = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            print(f"  ERROR: JSON parse failed: {e}")
+            print(f"  Response length: {len(raw_response)} chars")
+            print(f"  First 500 chars: {raw_response[:500]}")
+            print(f"  Last 500 chars: {raw_response[-500:]}")
+            # Try to salvage - skip this file and continue
+            print(f"  SKIPPING {pdf_file} due to JSON error")
+            continue
         rebuttal_text = split_result.get("rebuttal_text", "")
         denial_text = split_result.get("denial_text", "")
         payor = split_result.get("payor", "Unknown")
