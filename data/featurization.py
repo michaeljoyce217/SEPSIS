@@ -2,14 +2,23 @@
 # Rebuttal Engine v2 - Featurization (Data Gathering)
 #
 # This notebook handles TWO data pipelines:
-# 1. Gold Standard Letters: Ingest winning rebuttals for vector search
+# 1. Gold Standard Letters: Ingest past winning rebuttals for vector search
 # 2. New Denials: Pull clinical data for accounts needing rebuttals
+#
+# WHY TWO PIPELINES?
+# - Gold letters are ingested ONCE (or when new ones arrive)
+# - New denials are processed regularly as they come from the workqueue
 #
 # Run on Databricks Runtime 15.4 LTS ML
 
 # =============================================================================
 # CELL 1: Install Dependencies (run once per cluster)
 # =============================================================================
+# These packages are not pre-installed on Databricks ML runtime:
+# - azure-ai-documentintelligence: PDF text extraction via Azure AI
+# - azure-core: Required for Azure credential handling
+# - openai: Azure OpenAI API client
+#
 # %pip install azure-ai-documentintelligence azure-core openai
 # dbutils.library.restartPython()
 
@@ -27,28 +36,42 @@ from pyspark.sql.types import (
     TimestampType, MapType
 )
 
+# Get or create Spark session (already exists in Databricks notebooks)
 spark = SparkSession.builder.getOrCreate()
 
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-SCOPE_FILTER = "sepsis"  # "sepsis" | "all"
+# SCOPE_FILTER controls which cases we process:
+# - "sepsis": Only process sepsis-related denials (DRG 870/871/872)
+# - "all": Process all denial types (future expansion)
+SCOPE_FILTER = "sepsis"
+
+# DRG codes for sepsis:
+# - 870: Sepsis with MV >96 hours (most severe)
+# - 871: Sepsis without MV >96 hours (severe)
+# - 872: Sepsis without MCC (less severe)
 SEPSIS_DRG_CODES = ["870", "871", "872"]
 
 # =============================================================================
 # CELL 3: Environment Setup
 # =============================================================================
+# Determine which Unity Catalog to use based on environment variable.
+# Default to 'dev' if not set, but USE 'prod' catalog for dev
+# (this is intentional - dev environment reads from prod data)
 trgt_cat = os.environ.get('trgt_cat', 'dev')
 if trgt_cat == 'dev':
     spark.sql('USE CATALOG prod;')
 else:
     spark.sql(f'USE CATALOG {trgt_cat};')
 
-# Table names
+# Table names follow convention: {catalog}.fin_ds.fudgesicle_{purpose}
+# "fudgesicle" is the internal codename for this project
 GOLD_LETTERS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_gold_letters"
 INFERENCE_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_inference"
 
-# Paths - UPDATE FOR YOUR ENVIRONMENT
+# Paths to source files - UPDATE THESE for your Databricks workspace
+# These should point to your Repos folder or DBFS location
 GOLD_LETTERS_PATH = "/Workspace/Repos/your_user/fudgsicle/utils/gold_standard_rebuttals"
 DENIAL_LETTERS_PATH = "/Workspace/Repos/your_user/fudgsicle/utils/Sample_Denial_Letters"
 
@@ -58,6 +81,13 @@ print(f"Gold letters path: {GOLD_LETTERS_PATH}")
 # =============================================================================
 # CELL 4: Azure Credentials
 # =============================================================================
+# All secrets are stored in Databricks secret scope 'idp_etl'.
+# These credentials are managed by the platform team.
+#
+# az-openai-key1: API key for Azure OpenAI service
+# az-openai-base: Base endpoint URL for Azure OpenAI
+# az-doc-intelligence-key: API key for Azure Document Intelligence (PDF reading)
+# az-doc-intelligence-endpoint: Endpoint for Document Intelligence service
 AZURE_OPENAI_KEY = dbutils.secrets.get(scope='idp_etl', key='az-openai-key1')
 AZURE_OPENAI_ENDPOINT = dbutils.secrets.get(scope='idp_etl', key='az-openai-base')
 AZURE_DOC_INTEL_KEY = dbutils.secrets.get(scope='idp_etl', key='az-doc-intelligence-key')
@@ -73,12 +103,18 @@ from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 from azure.core.credentials import AzureKeyCredential
 
+# Azure OpenAI client - used for:
+# - Splitting combined PDF into rebuttal + denial sections
+# - Generating embeddings for vector search
 openai_client = AzureOpenAI(
     api_key=AZURE_OPENAI_KEY,
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
-    api_version="2024-10-21"
+    api_version="2024-10-21"  # Latest stable API version
 )
 
+# Document Intelligence client - used for:
+# - Extracting text from PDF files (denial letters, gold standard letters)
+# - Uses "prebuilt-read" model which handles various document layouts
 doc_intel_client = DocumentIntelligenceClient(
     endpoint=AZURE_DOC_INTEL_ENDPOINT,
     credential=AzureKeyCredential(AZURE_DOC_INTEL_KEY)
@@ -89,6 +125,18 @@ print("Azure clients initialized")
 # =============================================================================
 # CELL 6: Create Gold Letters Table (run once)
 # =============================================================================
+# This table stores past winning rebuttal letters with their embeddings.
+# The embeddings enable vector search to find similar denials.
+#
+# Schema:
+# - letter_id: UUID for each gold letter
+# - source_file: Original PDF filename for traceability
+# - payor: Insurance company (extracted during ingestion)
+# - denial_text: The original denial letter that was rebutted
+# - rebuttal_text: The winning rebuttal letter (what we learn from)
+# - denial_embedding: 1536-dim vector from text-embedding-ada-002
+# - created_at: When this record was ingested
+# - metadata: Additional info like split confidence
 create_gold_table_sql = f"""
 CREATE TABLE IF NOT EXISTS {GOLD_LETTERS_TABLE} (
     letter_id STRING NOT NULL,
@@ -110,6 +158,14 @@ print(f"Table {GOLD_LETTERS_TABLE} ready")
 # =============================================================================
 # CELL 7: Create Inference Table (run once)
 # =============================================================================
+# This table holds the input data for rebuttal generation.
+# Each row represents one denial case that needs a rebuttal letter.
+#
+# Data comes from two sources:
+# 1. Clarity (Epic EMR): Patient demographics, clinical notes, diagnosis codes
+# 2. Denial letter files: The actual denial letter text
+#
+# The inference.py script reads from this table to generate rebuttals.
 create_inference_table_sql = f"""
 CREATE TABLE IF NOT EXISTS {INFERENCE_TABLE} (
     hsp_account_id STRING,
@@ -146,12 +202,33 @@ print(f"Table {INFERENCE_TABLE} ready")
 
 # #############################################################################
 # PART 1: GOLD STANDARD LETTER INGESTION
-# Run this section when you have new gold standard letters to ingest
+# Run this section when you have new gold standard letters to ingest.
+#
+# BACKGROUND:
+# The gold standard letters are past rebuttals that WON their appeals.
+# Each PDF contains BOTH the winning rebuttal AND the original denial
+# (the denial is tacked onto the end of the document).
+#
+# PROCESS:
+# 1. Read PDF with Document Intelligence
+# 2. Use LLM to split into rebuttal vs denial sections
+# 3. Generate embedding of the denial (for matching new denials later)
+# 4. Store everything in Delta table
 # #############################################################################
 
 # =============================================================================
 # CELL 8: LLM Prompt for Splitting Rebuttal from Denial
 # =============================================================================
+# This prompt instructs GPT-4.1 to separate the combined document.
+# The model identifies the "split point" between the two letters
+# based on typical business letter markers (letterhead, dates, tone).
+#
+# Output is JSON with:
+# - rebuttal_text: The winning appeal letter
+# - denial_text: The original denial being rebutted
+# - payor: Insurance company name (for filtering/reporting)
+# - split_confidence: How confident the model is (0.0-1.0)
+# - split_reasoning: Explanation of how it found the split
 SPLIT_PROMPT = """You are analyzing a document that contains TWO business letters combined into one file.
 
 The document structure is:
@@ -191,7 +268,8 @@ Return ONLY valid JSON, no markdown."""
 # =============================================================================
 # CELL 9: Process Gold Standard Letters
 # =============================================================================
-# Set to True to run gold letter ingestion
+# Set RUN_GOLD_INGESTION = True when you have new gold letters to ingest.
+# This is typically run once initially, then again only when new letters arrive.
 RUN_GOLD_INGESTION = False
 
 if RUN_GOLD_INGESTION:
@@ -199,27 +277,35 @@ if RUN_GOLD_INGESTION:
     print("GOLD STANDARD LETTER INGESTION")
     print("="*60)
 
-    # List PDF files
+    # Find all PDF files in the gold letters directory
     pdf_files = [f for f in os.listdir(GOLD_LETTERS_PATH) if f.lower().endswith('.pdf')]
     print(f"Found {len(pdf_files)} PDF files")
 
+    # Will collect all successfully processed records here
     gold_records = []
 
+    # Process each PDF file one at a time
     for i, pdf_file in enumerate(pdf_files):
         print(f"\nProcessing {i+1}/{len(pdf_files)}: {pdf_file}")
         file_path = os.path.join(GOLD_LETTERS_PATH, pdf_file)
 
-        # Step 1: Read PDF with Document Intelligence
+        # ---------------------------------------------------------------------
+        # Step 1: Extract text from PDF using Document Intelligence
+        # ---------------------------------------------------------------------
+        # The "prebuilt-read" model extracts text while preserving reading order.
+        # This works well for business letters with standard layouts.
         print("  Reading PDF...")
         with open(file_path, "rb") as f:
             document_bytes = f.read()
 
+        # Submit document for analysis (async operation)
         poller = doc_intel_client.begin_analyze_document(
             model_id="prebuilt-read",
             body=AnalyzeDocumentRequest(bytes_source=document_bytes),
         )
         result = poller.result()
 
+        # Extract text line by line, preserving document order
         text_parts = []
         for page in result.pages:
             for line in page.lines:
@@ -227,7 +313,11 @@ if RUN_GOLD_INGESTION:
         full_text = "\n".join(text_parts)
         print(f"  Extracted {len(full_text)} characters")
 
-        # Step 2: Split rebuttal and denial using LLM
+        # ---------------------------------------------------------------------
+        # Step 2: Use LLM to split document into rebuttal and denial
+        # ---------------------------------------------------------------------
+        # The combined PDF has the winning rebuttal first, then the original
+        # denial tacked on at the end. We need to separate them.
         print("  Splitting rebuttal and denial...")
         response = openai_client.chat.completions.create(
             model="gpt-4.1",
@@ -235,10 +325,11 @@ if RUN_GOLD_INGESTION:
                 {"role": "system", "content": "Extract the two letters accurately. Return only valid JSON."},
                 {"role": "user", "content": SPLIT_PROMPT.format(document_text=full_text)}
             ],
-            temperature=0.1,
-            max_tokens=8000
+            temperature=0.1,  # Low temp for consistent extraction
+            max_tokens=8000   # Letters can be long
         )
 
+        # Parse LLM response - handle potential markdown code blocks
         raw_response = response.choices[0].message.content.strip()
         json_str = raw_response
         if "```json" in json_str:
@@ -246,6 +337,7 @@ if RUN_GOLD_INGESTION:
         elif "```" in json_str:
             json_str = json_str.split("```")[1].split("```")[0].strip()
 
+        # Extract fields from JSON response
         split_result = json.loads(json_str)
         rebuttal_text = split_result.get("rebuttal_text", "")
         denial_text = split_result.get("denial_text", "")
@@ -257,34 +349,49 @@ if RUN_GOLD_INGESTION:
         print(f"  Payor: {payor}")
         print(f"  Split confidence: {split_confidence}")
 
-        # Step 3: Generate embedding of denial (for matching new denials)
+        # ---------------------------------------------------------------------
+        # Step 3: Generate embedding for the denial text
+        # ---------------------------------------------------------------------
+        # We embed the DENIAL (not rebuttal) because when a new denial comes in,
+        # we want to find the most similar PAST denial to match against.
+        # The corresponding rebuttal is what we'll use as a template.
         print("  Generating embedding...")
+
+        # Truncate if too long (ada-002 has 8191 token limit, ~30k chars safe)
         embed_text = denial_text[:30000] if len(denial_text) > 30000 else denial_text
         embed_response = openai_client.embeddings.create(
             model="text-embedding-ada-002",
             input=embed_text
         )
-        denial_embedding = embed_response.data[0].embedding
+        denial_embedding = embed_response.data[0].embedding  # 1536 dimensions
         print(f"  Embedding dimension: {len(denial_embedding)}")
 
-        # Step 4: Create record
+        # ---------------------------------------------------------------------
+        # Step 4: Create record for this gold letter
+        # ---------------------------------------------------------------------
         record = {
-            "letter_id": str(uuid.uuid4()),
-            "source_file": pdf_file,
-            "payor": payor,
-            "denial_text": denial_text,
-            "rebuttal_text": rebuttal_text,
-            "denial_embedding": denial_embedding,
+            "letter_id": str(uuid.uuid4()),  # Unique ID for this letter
+            "source_file": pdf_file,          # Original filename for traceability
+            "payor": payor,                   # Insurance company
+            "denial_text": denial_text,       # Original denial (for reference)
+            "rebuttal_text": rebuttal_text,   # Winning rebuttal (what we learn from)
+            "denial_embedding": denial_embedding,  # Vector for similarity search
             "created_at": datetime.now(),
-            "metadata": {"split_confidence": split_confidence, "split_reasoning": split_reasoning},
+            "metadata": {
+                "split_confidence": split_confidence,
+                "split_reasoning": split_reasoning
+            },
         }
         gold_records.append(record)
         print(f"  Record created: {record['letter_id']}")
 
     print(f"\nProcessed {len(gold_records)} gold standard letters")
 
-    # Write to Delta table
+    # -------------------------------------------------------------------------
+    # Write all records to Delta table
+    # -------------------------------------------------------------------------
     if gold_records:
+        # Define explicit schema to ensure correct data types
         schema = StructType([
             StructField("letter_id", StringType(), False),
             StructField("source_file", StringType(), False),
@@ -296,11 +403,12 @@ if RUN_GOLD_INGESTION:
             StructField("metadata", MapType(StringType(), StringType()), True),
         ])
 
+        # Create DataFrame and append to table
         gold_df = spark.createDataFrame(gold_records, schema)
         gold_df.write.format("delta").mode("append").saveAsTable(GOLD_LETTERS_TABLE)
         print(f"Wrote {len(gold_records)} records to {GOLD_LETTERS_TABLE}")
 
-    # Verify
+    # Verify final count
     count = spark.sql(f"SELECT COUNT(*) as cnt FROM {GOLD_LETTERS_TABLE}").collect()[0]["cnt"]
     print(f"Total records in gold letters table: {count}")
 
@@ -309,13 +417,29 @@ else:
 
 # #############################################################################
 # PART 2: NEW DENIAL FEATURIZATION
-# Run this section to prepare new denial cases for inference
+# Run this section to prepare new denial cases for inference.
+#
+# BACKGROUND:
+# When a new denial arrives, we need to gather all the data needed to
+# generate a rebuttal. This includes:
+# - Patient demographics (name, DOB)
+# - Clinical notes (discharge summary, H&P)
+# - Diagnosis codes
+# - The denial letter text itself
+#
+# OUTPUT:
+# One row per denial case in the inference table, ready for inference.py
 # #############################################################################
 
 # =============================================================================
 # CELL 10: Target Accounts Configuration
 # =============================================================================
+# For POC: Manually specify which accounts to process.
+# In production: This would come from a workqueue table.
+#
 # Format: (HSP_ACCOUNT_ID, denial_letter_filename)
+# - HSP_ACCOUNT_ID: Hospital account ID from Epic (links to Clarity data)
+# - denial_letter_filename: Name of PDF file in DENIAL_LETTERS_PATH
 TARGET_ACCOUNTS = [
     # UPDATE THESE with your test cases:
     # ("123456789", "denial_letter_1.pdf"),
@@ -325,8 +449,9 @@ TARGET_ACCOUNTS = [
 print(f"\nTarget accounts configured: {len(TARGET_ACCOUNTS)}")
 
 # =============================================================================
-# CELL 11: Clinical Data Query
+# CELL 11: Clinical Data Query and Denial Processing
 # =============================================================================
+# Set RUN_DENIAL_FEATURIZATION = True when you have accounts to process.
 RUN_DENIAL_FEATURIZATION = False
 
 if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
@@ -334,16 +459,25 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     print("NEW DENIAL FEATURIZATION")
     print("="*60)
 
+    # Build list of account IDs for SQL query
     account_ids = [a[0] for a in TARGET_ACCOUNTS]
     account_list = ",".join(f"'{a}'" for a in account_ids)
 
-    # Query clinical data from Clarity
+    # -------------------------------------------------------------------------
+    # Query clinical data from Clarity (Epic's reporting database)
+    # -------------------------------------------------------------------------
+    # This is a large CTE-based query that joins multiple Clarity tables.
+    # It retrieves everything we need to generate a rebuttal letter.
     print("\nQuerying clinical data from Clarity...")
 
     clinical_query = f"""
+    -- Create temporary list of target accounts
     WITH target_accounts AS (
         SELECT explode(array({account_list})) AS hsp_account_id
     ),
+
+    -- Find the most recent encounter for each account
+    -- (some accounts may have multiple encounters)
     encounters AS (
         SELECT
             pe.pat_enc_csn_id,
@@ -359,6 +493,9 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     latest_encounters AS (
         SELECT * FROM encounters WHERE rn = 1
     ),
+
+    -- Get discharge summary notes (note_type_c = 2)
+    -- These summarize the entire hospital stay
     discharge_notes AS (
         SELECT
             e.hsp_account_id,
@@ -371,6 +508,9 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
         WHERE hno.note_type_c = 2
         GROUP BY e.hsp_account_id, hno.note_id, hno.pat_enc_csn_id
     ),
+
+    -- Get H&P (History & Physical) notes (note_type_c = 1)
+    -- These document initial presentation and findings
     hp_notes AS (
         SELECT
             e.hsp_account_id,
@@ -383,6 +523,8 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
         WHERE hno.note_type_c = 1
         GROUP BY e.hsp_account_id, hno.note_id, hno.pat_enc_csn_id
     ),
+
+    -- Get patient demographics
     patient_info AS (
         SELECT
             e.hsp_account_id,
@@ -393,6 +535,8 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
         FROM prod.clarity_cur.patient_enh p
         INNER JOIN latest_encounters e ON p.pat_id = e.pat_id
     ),
+
+    -- Get account/admission info
     account_info AS (
         SELECT
             ha.hsp_account_id,
@@ -405,6 +549,8 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
         INNER JOIN target_accounts ta ON ha.hsp_account_id = ta.hsp_account_id
         LEFT JOIN prod.clarity.zc_loc_facility f ON ha.loc_id = f.facility_id
     ),
+
+    -- Get claim info (for reference numbers)
     claim_info AS (
         SELECT
             hcd.hsp_account_id,
@@ -415,6 +561,8 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
         INNER JOIN target_accounts ta ON hcd.hsp_account_id = ta.hsp_account_id
         GROUP BY hcd.hsp_account_id
     ),
+
+    -- Get primary diagnosis (line 1)
     diagnosis AS (
         SELECT
             hadl.hsp_account_id,
@@ -423,9 +571,11 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
         FROM prod.clarity_cur.hsp_acct_dx_list_enh hadl
         INNER JOIN target_accounts ta ON hadl.hsp_account_id = ta.hsp_account_id
         INNER JOIN prod.clarity_cur.edg_current_icd10_enh edg ON hadl.dx_id = edg.dx_id
-        WHERE hadl.line = 1
+        WHERE hadl.line = 1  -- Primary diagnosis only
         GROUP BY hadl.hsp_account_id
     )
+
+    -- Final SELECT: Join all CTEs together
     SELECT
         ta.hsp_account_id,
         pi.pat_id,
@@ -455,27 +605,33 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     LEFT JOIN hp_notes hp ON ta.hsp_account_id = hp.hsp_account_id
     """
 
+    # Execute query and convert to Pandas for easier manipulation
     clinical_df = spark.sql(clinical_query).toPandas()
     print(f"Retrieved clinical data for {len(clinical_df)} accounts")
 
-    # Read denial letters
+    # -------------------------------------------------------------------------
+    # Read denial letter files
+    # -------------------------------------------------------------------------
+    # For each account, read the associated denial letter PDF (or txt file).
+    # Store the extracted text in a dictionary keyed by account ID.
     print("\nReading denial letters...")
-    denial_texts = {}
-    filename_map = {}
+    denial_texts = {}      # Maps account_id -> extracted text
+    filename_map = {}      # Maps account_id -> filename (for traceability)
 
     for hsp_account_id, filename in TARGET_ACCOUNTS:
         file_path = os.path.join(DENIAL_LETTERS_PATH, filename)
         filename_map[hsp_account_id] = filename
 
         try:
-            # Check file extension
+            # Check file extension to determine how to read
             _, ext = os.path.splitext(filename.lower())
 
             if ext == ".txt":
+                # Plain text files can be read directly
                 with open(file_path, "r", encoding="utf-8") as f:
                     denial_texts[hsp_account_id] = f.read()
             else:
-                # Use Document Intelligence
+                # PDFs require Document Intelligence for text extraction
                 with open(file_path, "rb") as f:
                     document_bytes = f.read()
 
@@ -485,6 +641,7 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
                 )
                 result = poller.result()
 
+                # Extract text line by line
                 text_parts = []
                 for page in result.pages:
                     for line in page.lines:
@@ -496,7 +653,9 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
             print(f"  ERROR reading {filename}: {e}")
             denial_texts[hsp_account_id] = None
 
-    # Add denial letter text and metadata
+    # -------------------------------------------------------------------------
+    # Add denial text and metadata to clinical data
+    # -------------------------------------------------------------------------
     clinical_df['denial_letter_text'] = clinical_df['hsp_account_id'].map(denial_texts)
     clinical_df['denial_letter_filename'] = clinical_df['hsp_account_id'].map(filename_map)
     clinical_df['scope_filter'] = SCOPE_FILTER
@@ -505,12 +664,15 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
     print(f"\nFeaturized dataset: {len(clinical_df)} rows")
     print(f"Columns: {list(clinical_df.columns)}")
 
-    # Preview
+    # Show preview of processed data
     print("\nPREVIEW:")
     print(clinical_df[['hsp_account_id', 'formatted_name', 'denial_letter_filename']].to_string())
 
-    # Write to table
-    WRITE_TO_TABLE = False  # Set to True to write
+    # -------------------------------------------------------------------------
+    # Write to Delta table
+    # -------------------------------------------------------------------------
+    # Set WRITE_TO_TABLE = True when ready to persist data
+    WRITE_TO_TABLE = False
 
     if WRITE_TO_TABLE:
         spark_df = spark.createDataFrame(clinical_df)
@@ -529,6 +691,7 @@ else:
 # =============================================================================
 # CELL 12: Verify Tables
 # =============================================================================
+# Quick check of table status - useful for debugging
 print("\n" + "="*60)
 print("TABLE STATUS")
 print("="*60)
