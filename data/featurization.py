@@ -318,40 +318,10 @@ USING DELTA
 spark.sql(create_gold_table_sql)
 print(f"Table {GOLD_LETTERS_TABLE} ready")
 
-# Inference Table - includes denial_embedding for rigorous comparison
-create_inference_table_sql = f"""
-CREATE TABLE IF NOT EXISTS {INFERENCE_TABLE} (
-    hsp_account_id STRING,
-    pat_id STRING,
-    pat_mrn_id STRING,
-    formatted_name STRING,
-    formatted_birthdate STRING,
-    facility_name STRING,
-    number_of_midnights INT,
-    formatted_date_of_service STRING,
-    claim_number STRING,
-    tax_id STRING,
-    npi STRING,
-    code STRING,
-    dx_name STRING,
-    discharge_summary_note_id STRING,
-    discharge_note_csn_id STRING,
-    discharge_summary_text STRING,
-    hp_note_id STRING,
-    hp_note_csn_id STRING,
-    hp_note_text STRING,
-    denial_letter_text STRING,
-    denial_letter_filename STRING,
-    denial_embedding ARRAY<FLOAT>,
-    payor STRING,
-    scope_filter STRING,
-    featurization_timestamp STRING,
-    insert_tsp TIMESTAMP
-)
-USING DELTA
-"""
-spark.sql(create_inference_table_sql)
-print(f"Table {INFERENCE_TABLE} ready")
+# Inference Table - DO NOT pre-create
+# Let Spark create it from DataFrame schema to avoid type mismatches
+# (Python floats -> ARRAY<DOUBLE>, not ARRAY<FLOAT>)
+print(f"Inference table {INFERENCE_TABLE} will be created on first write")
 
 # #############################################################################
 # PART 1: GOLD STANDARD LETTER INGESTION
