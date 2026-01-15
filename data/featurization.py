@@ -10,10 +10,16 @@
 # Run on Databricks Runtime 15.4 LTS ML
 
 # =============================================================================
-# CELL 1: Install Dependencies (run once per cluster)
+# CELL 1: Install Dependencies (run this cell FIRST, then restart)
 # =============================================================================
-# %pip install azure-ai-documentintelligence==1.0.2 openai
+# IMPORTANT: Run this cell by itself, then run the rest of the notebook.
+# After restart, the packages persist for the cluster session.
+#
+# Uncomment and run ONCE per cluster session:
+# %pip install azure-ai-documentintelligence==1.0.2 openai python-docx
 # dbutils.library.restartPython()
+#
+# After restart completes, run Cell 2 onwards (leave this cell commented)
 
 # =============================================================================
 # CELL 2: Imports and Configuration
