@@ -656,8 +656,49 @@ else:
     denial_text = "\n\n".join(pages)
     print(f"  Extracted {len(pages)} pages, {len(denial_text)} chars")
 
-    # Extract denial info via LLM
-    print("\nStep 2: Extracting denial info via LLM...")
+    # ---------------------------------------------------------------------
+    # STEP 2: Find similar gold standard letter (only needs denial text)
+    # ---------------------------------------------------------------------
+    print("\nStep 2: Finding similar gold standard letter...")
+    denial_embedding = generate_embedding(denial_text)
+    print(f"  Generated embedding ({len(denial_embedding)} dims)")
+
+    gold_letter = None
+    gold_letter_score = 0.0
+
+    if gold_letters_cache:
+        best_score = 0.0
+        best_match = None
+
+        for letter in gold_letters_cache:
+            if letter["denial_embedding"]:
+                vec1 = denial_embedding
+                vec2 = letter["denial_embedding"]
+                dot_product = sum(a * b for a, b in zip(vec1, vec2))
+                norm1 = math.sqrt(sum(a * a for a in vec1))
+                norm2 = math.sqrt(sum(b * b for b in vec2))
+                if norm1 > 0 and norm2 > 0:
+                    similarity = dot_product / (norm1 * norm2)
+                    if similarity > best_score:
+                        best_score = similarity
+                        best_match = letter
+
+        gold_letter_score = best_score
+
+        if best_match and best_score >= MATCH_SCORE_THRESHOLD:
+            gold_letter = best_match
+            print(f"  Found match: {gold_letter['source_file']} (score: {best_score:.3f})")
+        elif default_template:
+            gold_letter = default_template
+            gold_letter_score = 0.0
+            print(f"  No good match (best: {best_score:.3f}) - using default template")
+        else:
+            print(f"  No good match (best: {best_score:.3f})")
+
+    # ---------------------------------------------------------------------
+    # STEP 3: Extract denial info via LLM
+    # ---------------------------------------------------------------------
+    print("\nStep 3: Extracting denial info via LLM...")
     denial_info = extract_denial_info_llm(denial_text[:15000])
     print(f"  Account ID: {denial_info['hsp_account_id'] or 'NOT FOUND'}")
     print(f"  Payor: {denial_info['payor']}")
@@ -675,51 +716,12 @@ else:
             print("\nWARNING: Denial not identified as sepsis-related. Proceeding anyway (set SCOPE_FILTER='all' to skip this check).")
 
         # ---------------------------------------------------------------------
-        # STEP 3: Query Clarity for clinical notes
+        # STEP 4: Query Clarity for clinical notes
         # ---------------------------------------------------------------------
-        print(f"\nStep 3: Querying Clarity for account {account_id}...")
+        print(f"\nStep 4: Querying Clarity for account {account_id}...")
         clinical_data = query_clarity_for_account(account_id)
 
         if clinical_data:
-            # ---------------------------------------------------------------------
-            # STEP 4: Generate embedding and find gold letter
-            # ---------------------------------------------------------------------
-            print("\nStep 4: Finding similar gold standard letter...")
-            denial_embedding = generate_embedding(denial_text)
-            print(f"  Generated embedding ({len(denial_embedding)} dims)")
-
-            gold_letter = None
-            gold_letter_score = 0.0
-
-            if gold_letters_cache:
-                best_score = 0.0
-                best_match = None
-
-                for letter in gold_letters_cache:
-                    if letter["denial_embedding"]:
-                        vec1 = denial_embedding
-                        vec2 = letter["denial_embedding"]
-                        dot_product = sum(a * b for a, b in zip(vec1, vec2))
-                        norm1 = math.sqrt(sum(a * a for a in vec1))
-                        norm2 = math.sqrt(sum(b * b for b in vec2))
-                        if norm1 > 0 and norm2 > 0:
-                            similarity = dot_product / (norm1 * norm2)
-                            if similarity > best_score:
-                                best_score = similarity
-                                best_match = letter
-
-                gold_letter_score = best_score
-
-                if best_match and best_score >= MATCH_SCORE_THRESHOLD:
-                    gold_letter = best_match
-                    print(f"  Found match: {gold_letter['source_file']} (score: {best_score:.3f})")
-                elif default_template:
-                    gold_letter = default_template
-                    gold_letter_score = 0.0
-                    print(f"  No good match (best: {best_score:.3f}) - using default template")
-                else:
-                    print(f"  No good match (best: {best_score:.3f})")
-
             # ---------------------------------------------------------------------
             # STEP 5: Extract clinical notes
             # ---------------------------------------------------------------------

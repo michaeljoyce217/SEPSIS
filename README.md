@@ -45,9 +45,9 @@ When insurance payors deny or downgrade sepsis DRG claims (870/871/872), this sy
 │  [Denial PDF] ──► inference.py ──► [DOCX Appeal Letter]                    │
 │                                                                             │
 │  Step 1: Parse PDF (Document Intelligence)                                  │
-│  Step 2: Extract denial info (LLM: account ID, payor, DRGs)                │
-│  Step 3: Query Clarity for this account's clinical notes                   │
-│  Step 4: Vector search for best gold letter match                          │
+│  Step 2: Vector search for best gold letter (uses denial text only)        │
+│  Step 3: Extract denial info (LLM: account ID, payor, DRGs)                │
+│  Step 4: Query Clarity for this account's clinical notes                   │
 │  Step 5: Extract clinical data from long notes (LLM)                       │
 │  Step 6: Generate appeal letter (LLM)                                      │
 │  Step 7: Export to DOCX                                                    │

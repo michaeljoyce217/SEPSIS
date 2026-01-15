@@ -680,9 +680,9 @@
 │  [Denial PDF] ──► inference.py ──► [DOCX Appeal Letter]                    │
 │                                                                             │
 │  Step 1: Parse PDF (Document Intelligence)                                  │
-│  Step 2: Extract denial info (LLM: account ID, payor, DRGs)                │
-│  Step 3: Query Clarity for this account's clinical notes                   │
-│  Step 4: Vector search for best gold letter match                          │
+│  Step 2: Vector search for best gold letter (uses denial text only)        │
+│  Step 3: Extract denial info (LLM: account ID, payor, DRGs)                │
+│  Step 4: Query Clarity for this account's clinical notes                   │
 │  Step 5: Extract clinical data from long notes (LLM)                       │
 │  Step 6: Generate appeal letter (LLM)                                      │
 │  Step 7: Export to DOCX                                                    │
@@ -945,22 +945,22 @@
                     <td>Page-by-page text</td>
                 </tr>
                 <tr>
-                    <td>2. Extract Info</td>
+                    <td>2. Vector Search</td>
+                    <td>Denial text</td>
+                    <td>ada-002 embedding + cosine similarity</td>
+                    <td>Best-match gold letter</td>
+                </tr>
+                <tr>
+                    <td>3. Extract Info</td>
                     <td>Raw denial text</td>
                     <td>GPT-4.1 structured extraction</td>
                     <td>account_id, payor, DRGs, is_sepsis</td>
                 </tr>
                 <tr>
-                    <td>3. Query Clarity</td>
+                    <td>4. Query Clarity</td>
                     <td>account_id</td>
                     <td>Spark SQL query</td>
                     <td>14 clinical note types</td>
-                </tr>
-                <tr>
-                    <td>4. Vector Search</td>
-                    <td>Denial text</td>
-                    <td>ada-002 embedding + cosine similarity</td>
-                    <td>Best-match gold letter</td>
                 </tr>
                 <tr>
                     <td>5. Extract Notes</td>

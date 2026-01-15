@@ -55,9 +55,9 @@ Run for each denial letter:
 | Step | Technology | Function |
 |------|------------|----------|
 | 1. PDF Parse | Azure AI Document Intelligence | OCR extraction from denial PDF |
-| 2. Info Extract | GPT-4.1 | Extract: account_id, payor, DRGs, is_sepsis |
-| 3. Clarity Query | Spark SQL | Get 14 clinical note types for this account |
-| 4. Vector Search | Cosine Similarity | Find best-matching gold letter |
+| 2. Vector Search | Cosine Similarity | Find best-matching gold letter (uses denial text only) |
+| 3. Info Extract | GPT-4.1 | Extract: account_id, payor, DRGs, is_sepsis |
+| 4. Clarity Query | Spark SQL | Get 14 clinical note types for this account |
 | 5. Note Extraction | GPT-4.1 (parallel) | Extract clinical data with timestamps from long notes |
 | 6. Letter Generation | GPT-4.1 | Generate appeal using gold letter + clinical evidence |
 | 7. Export | python-docx | Output DOCX for CDI review |
