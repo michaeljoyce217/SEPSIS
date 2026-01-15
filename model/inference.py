@@ -248,141 +248,102 @@ def extract_denial_info_llm(text):
 print("Core functions loaded")
 
 # =============================================================================
-# CELL 6: Clarity Query Function (Single Account)
+# CELL 6: Clarity Query Function (Single Account) - OPTIMIZED
 # =============================================================================
+
+# Note type mapping for pivoting
+NOTE_TYPE_MAP = {
+    'H&P': ('hp_note_id', 'hp_note_csn_id', 'hp_note_text'),
+    'Discharge Summary': ('discharge_summary_note_id', 'discharge_note_csn_id', 'discharge_summary_text'),
+    'Progress Notes': ('progress_note_id', 'progress_note_csn_id', 'progress_note_text'),
+    'Consults': ('consult_note_id', 'consult_note_csn_id', 'consult_note_text'),
+    'ED Notes': ('ed_notes_id', 'ed_notes_csn_id', 'ed_notes_text'),
+    'Initial Assessments': ('initial_assessment_id', 'initial_assessment_csn_id', 'initial_assessment_text'),
+    'ED Triage Notes': ('ed_triage_id', 'ed_triage_csn_id', 'ed_triage_text'),
+    'ED Provider Notes': ('ed_provider_note_id', 'ed_provider_note_csn_id', 'ed_provider_note_text'),
+    'Addendum Note': ('addendum_note_id', 'addendum_note_csn_id', 'addendum_note_text'),
+    'Hospital Course': ('hospital_course_id', 'hospital_course_csn_id', 'hospital_course_text'),
+    'Subjective & Objective': ('subjective_objective_id', 'subjective_objective_csn_id', 'subjective_objective_text'),
+    'Assessment & Plan Note': ('assessment_plan_id', 'assessment_plan_csn_id', 'assessment_plan_text'),
+    'Nursing Note': ('nursing_note_id', 'nursing_note_csn_id', 'nursing_note_text'),
+    'Code Documentation': ('code_documentation_id', 'code_documentation_csn_id', 'code_documentation_text'),
+}
 
 def query_clarity_for_account(account_id):
     """
     Query Clarity for clinical notes for a single account.
+    Uses two simple queries instead of one complex query for better performance.
     Returns dict with patient info and 14 clinical note types.
     """
     print(f"  Querying Clarity for account {account_id}...")
 
-    clinical_query = f"""
-    WITH notes AS (
-        SELECT * FROM (
-            SELECT peh.pat_id
-                  ,peh.hsp_account_id
-                  ,nte.ip_note_type
-                  ,nte.note_id
-                  ,nte.note_csn_id
-                  ,nte.contact_date AS note_contact_date
-                  ,nte.ent_inst_local_dttm AS entry_datetime
-                  ,CONCAT_WS('\\n', SORT_ARRAY(COLLECT_LIST(STRUCT(nte.line, nte.note_text))).note_text) AS note_text
-            FROM clarity_cur.pat_enc_hsp_har_enh peh
-            INNER JOIN clarity_cur.hno_note_text_enh nte USING(pat_enc_csn_id)
-            WHERE peh.hsp_account_id = '{account_id}'
-              AND nte.ip_note_type IN (
-                'Progress Notes', 'Consults', 'H&P', 'Discharge Summary',
-                'ED Notes', 'Initial Assessments', 'ED Triage Notes', 'ED Provider Notes',
-                'Addendum Note', 'Hospital Course', 'Subjective & Objective',
-                'Assessment & Plan Note', 'Nursing Note', 'Code Documentation'
-              )
-            GROUP BY peh.pat_id, peh.hsp_account_id, nte.ip_note_type, nte.note_id,
-                     nte.note_csn_id, nte.contact_date, nte.ent_inst_local_dttm
-        )
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY hsp_account_id, ip_note_type ORDER BY note_contact_date DESC, entry_datetime DESC) = 1
-    ),
-
-    -- Individual note type CTEs
-    hp_note AS (SELECT hsp_account_id, note_id AS hp_note_id, note_csn_id AS hp_note_csn_id, note_text AS hp_note_text FROM notes WHERE ip_note_type = 'H&P'),
-    discharge AS (SELECT hsp_account_id, note_id AS discharge_summary_note_id, note_csn_id AS discharge_note_csn_id, note_text AS discharge_summary_text FROM notes WHERE ip_note_type = 'Discharge Summary'),
-    progress_note AS (SELECT hsp_account_id, note_id AS progress_note_id, note_csn_id AS progress_note_csn_id, note_text AS progress_note_text FROM notes WHERE ip_note_type = 'Progress Notes'),
-    consult_note AS (SELECT hsp_account_id, note_id AS consult_note_id, note_csn_id AS consult_note_csn_id, note_text AS consult_note_text FROM notes WHERE ip_note_type = 'Consults'),
-    ed_notes AS (SELECT hsp_account_id, note_id AS ed_notes_id, note_csn_id AS ed_notes_csn_id, note_text AS ed_notes_text FROM notes WHERE ip_note_type = 'ED Notes'),
-    initial_assessment AS (SELECT hsp_account_id, note_id AS initial_assessment_id, note_csn_id AS initial_assessment_csn_id, note_text AS initial_assessment_text FROM notes WHERE ip_note_type = 'Initial Assessments'),
-    ed_triage AS (SELECT hsp_account_id, note_id AS ed_triage_id, note_csn_id AS ed_triage_csn_id, note_text AS ed_triage_text FROM notes WHERE ip_note_type = 'ED Triage Notes'),
-    ed_provider_note AS (SELECT hsp_account_id, note_id AS ed_provider_note_id, note_csn_id AS ed_provider_note_csn_id, note_text AS ed_provider_note_text FROM notes WHERE ip_note_type = 'ED Provider Notes'),
-    addendum_note AS (SELECT hsp_account_id, note_id AS addendum_note_id, note_csn_id AS addendum_note_csn_id, note_text AS addendum_note_text FROM notes WHERE ip_note_type = 'Addendum Note'),
-    hospital_course AS (SELECT hsp_account_id, note_id AS hospital_course_id, note_csn_id AS hospital_course_csn_id, note_text AS hospital_course_text FROM notes WHERE ip_note_type = 'Hospital Course'),
-    subjective_objective AS (SELECT hsp_account_id, note_id AS subjective_objective_id, note_csn_id AS subjective_objective_csn_id, note_text AS subjective_objective_text FROM notes WHERE ip_note_type = 'Subjective & Objective'),
-    assessment_plan AS (SELECT hsp_account_id, note_id AS assessment_plan_id, note_csn_id AS assessment_plan_csn_id, note_text AS assessment_plan_text FROM notes WHERE ip_note_type = 'Assessment & Plan Note'),
-    nursing_note AS (SELECT hsp_account_id, note_id AS nursing_note_id, note_csn_id AS nursing_note_csn_id, note_text AS nursing_note_text FROM notes WHERE ip_note_type = 'Nursing Note'),
-    code_documentation AS (SELECT hsp_account_id, note_id AS code_documentation_id, note_csn_id AS code_documentation_csn_id, note_text AS code_documentation_text FROM notes WHERE ip_note_type = 'Code Documentation'),
-
-    patient_info AS (
-        SELECT ha.hsp_account_id, patient.pat_id, patient.pat_mrn_id,
-               CONCAT(patient.pat_first_name, ' ', patient.pat_last_name) AS formatted_name,
-               DATE_FORMAT(patient.birth_date, 'MM/dd/yyyy') AS formatted_birthdate,
-               'Mercy Hospital' AS facility_name,
-               DATEDIFF(ha.disch_date_time, DATE(ha.adm_date_time)) AS number_of_midnights,
-               CONCAT(DATE_FORMAT(ha.adm_date_time, 'MM/dd/yyyy'), '-', DATE_FORMAT(ha.disch_date_time, 'MM/dd/yyyy')) AS formatted_date_of_service
-        FROM clarity_cur.hsp_account_enh ha
-        INNER JOIN clarity_cur.patient_enh patient ON ha.pat_id = patient.pat_id
-        WHERE ha.hsp_account_id = '{account_id}'
-    )
-
-    SELECT pi.*,
-           COALESCE(d.discharge_summary_note_id, 'no id available') AS discharge_summary_note_id,
-           COALESCE(d.discharge_note_csn_id, 'no id available') AS discharge_note_csn_id,
-           COALESCE(d.discharge_summary_text, 'No Note Available') AS discharge_summary_text,
-           COALESCE(h.hp_note_id, 'no id available') AS hp_note_id,
-           COALESCE(h.hp_note_csn_id, 'no id available') AS hp_note_csn_id,
-           COALESCE(h.hp_note_text, 'No Note Available') AS hp_note_text,
-           COALESCE(pn.progress_note_id, 'no id available') AS progress_note_id,
-           COALESCE(pn.progress_note_csn_id, 'no id available') AS progress_note_csn_id,
-           COALESCE(pn.progress_note_text, 'No Note Available') AS progress_note_text,
-           COALESCE(cn.consult_note_id, 'no id available') AS consult_note_id,
-           COALESCE(cn.consult_note_csn_id, 'no id available') AS consult_note_csn_id,
-           COALESCE(cn.consult_note_text, 'No Note Available') AS consult_note_text,
-           COALESCE(edn.ed_notes_id, 'no id available') AS ed_notes_id,
-           COALESCE(edn.ed_notes_csn_id, 'no id available') AS ed_notes_csn_id,
-           COALESCE(edn.ed_notes_text, 'No Note Available') AS ed_notes_text,
-           COALESCE(ia.initial_assessment_id, 'no id available') AS initial_assessment_id,
-           COALESCE(ia.initial_assessment_csn_id, 'no id available') AS initial_assessment_csn_id,
-           COALESCE(ia.initial_assessment_text, 'No Note Available') AS initial_assessment_text,
-           COALESCE(edt.ed_triage_id, 'no id available') AS ed_triage_id,
-           COALESCE(edt.ed_triage_csn_id, 'no id available') AS ed_triage_csn_id,
-           COALESCE(edt.ed_triage_text, 'No Note Available') AS ed_triage_text,
-           COALESCE(edp.ed_provider_note_id, 'no id available') AS ed_provider_note_id,
-           COALESCE(edp.ed_provider_note_csn_id, 'no id available') AS ed_provider_note_csn_id,
-           COALESCE(edp.ed_provider_note_text, 'No Note Available') AS ed_provider_note_text,
-           COALESCE(an.addendum_note_id, 'no id available') AS addendum_note_id,
-           COALESCE(an.addendum_note_csn_id, 'no id available') AS addendum_note_csn_id,
-           COALESCE(an.addendum_note_text, 'No Note Available') AS addendum_note_text,
-           COALESCE(hc.hospital_course_id, 'no id available') AS hospital_course_id,
-           COALESCE(hc.hospital_course_csn_id, 'no id available') AS hospital_course_csn_id,
-           COALESCE(hc.hospital_course_text, 'No Note Available') AS hospital_course_text,
-           COALESCE(so.subjective_objective_id, 'no id available') AS subjective_objective_id,
-           COALESCE(so.subjective_objective_csn_id, 'no id available') AS subjective_objective_csn_id,
-           COALESCE(so.subjective_objective_text, 'No Note Available') AS subjective_objective_text,
-           COALESCE(ap.assessment_plan_id, 'no id available') AS assessment_plan_id,
-           COALESCE(ap.assessment_plan_csn_id, 'no id available') AS assessment_plan_csn_id,
-           COALESCE(ap.assessment_plan_text, 'No Note Available') AS assessment_plan_text,
-           COALESCE(nn.nursing_note_id, 'no id available') AS nursing_note_id,
-           COALESCE(nn.nursing_note_csn_id, 'no id available') AS nursing_note_csn_id,
-           COALESCE(nn.nursing_note_text, 'No Note Available') AS nursing_note_text,
-           COALESCE(cd.code_documentation_id, 'no id available') AS code_documentation_id,
-           COALESCE(cd.code_documentation_csn_id, 'no id available') AS code_documentation_csn_id,
-           COALESCE(cd.code_documentation_text, 'No Note Available') AS code_documentation_text
-    FROM patient_info pi
-    LEFT JOIN discharge d ON pi.hsp_account_id = d.hsp_account_id
-    LEFT JOIN hp_note h ON pi.hsp_account_id = h.hsp_account_id
-    LEFT JOIN progress_note pn ON pi.hsp_account_id = pn.hsp_account_id
-    LEFT JOIN consult_note cn ON pi.hsp_account_id = cn.hsp_account_id
-    LEFT JOIN ed_notes edn ON pi.hsp_account_id = edn.hsp_account_id
-    LEFT JOIN initial_assessment ia ON pi.hsp_account_id = ia.hsp_account_id
-    LEFT JOIN ed_triage edt ON pi.hsp_account_id = edt.hsp_account_id
-    LEFT JOIN ed_provider_note edp ON pi.hsp_account_id = edp.hsp_account_id
-    LEFT JOIN addendum_note an ON pi.hsp_account_id = an.hsp_account_id
-    LEFT JOIN hospital_course hc ON pi.hsp_account_id = hc.hsp_account_id
-    LEFT JOIN subjective_objective so ON pi.hsp_account_id = so.hsp_account_id
-    LEFT JOIN assessment_plan ap ON pi.hsp_account_id = ap.hsp_account_id
-    LEFT JOIN nursing_note nn ON pi.hsp_account_id = nn.hsp_account_id
-    LEFT JOIN code_documentation cd ON pi.hsp_account_id = cd.hsp_account_id
+    # Query 1: Get patient info (fast, simple query)
+    patient_query = f"""
+    SELECT ha.hsp_account_id, patient.pat_id, patient.pat_mrn_id,
+           CONCAT(patient.pat_first_name, ' ', patient.pat_last_name) AS formatted_name,
+           DATE_FORMAT(patient.birth_date, 'MM/dd/yyyy') AS formatted_birthdate,
+           'Mercy Hospital' AS facility_name,
+           DATEDIFF(ha.disch_date_time, DATE(ha.adm_date_time)) AS number_of_midnights,
+           CONCAT(DATE_FORMAT(ha.adm_date_time, 'MM/dd/yyyy'), '-', DATE_FORMAT(ha.disch_date_time, 'MM/dd/yyyy')) AS formatted_date_of_service
+    FROM clarity_cur.hsp_account_enh ha
+    INNER JOIN clarity_cur.patient_enh patient ON ha.pat_id = patient.pat_id
+    WHERE ha.hsp_account_id = '{account_id}'
     """
 
-    result_df = spark.sql(clinical_query)
-    rows = result_df.collect()
-
-    if not rows:
-        print(f"  WARNING: No data found in Clarity for account {account_id}")
+    patient_rows = spark.sql(patient_query).collect()
+    if not patient_rows:
+        print(f"  WARNING: No patient found in Clarity for account {account_id}")
         return None
 
-    # Convert to dict
-    row = rows[0]
-    clinical_data = row.asDict()
+    clinical_data = patient_rows[0].asDict()
     print(f"  Found patient: {clinical_data.get('formatted_name', 'Unknown')}")
+
+    # Query 2: Get all notes for this account (simpler query, pivot in Python)
+    notes_query = f"""
+    SELECT
+        nte.ip_note_type,
+        nte.note_id,
+        nte.note_csn_id,
+        nte.contact_date,
+        nte.ent_inst_local_dttm,
+        CONCAT_WS('\\n', SORT_ARRAY(COLLECT_LIST(STRUCT(nte.line, nte.note_text))).note_text) AS note_text
+    FROM clarity_cur.pat_enc_hsp_har_enh peh
+    INNER JOIN clarity_cur.hno_note_text_enh nte USING(pat_enc_csn_id)
+    WHERE peh.hsp_account_id = '{account_id}'
+      AND nte.ip_note_type IN (
+        'Progress Notes', 'Consults', 'H&P', 'Discharge Summary',
+        'ED Notes', 'Initial Assessments', 'ED Triage Notes', 'ED Provider Notes',
+        'Addendum Note', 'Hospital Course', 'Subjective & Objective',
+        'Assessment & Plan Note', 'Nursing Note', 'Code Documentation'
+      )
+    GROUP BY nte.ip_note_type, nte.note_id, nte.note_csn_id, nte.contact_date, nte.ent_inst_local_dttm
+    """
+
+    print(f"  Fetching clinical notes...")
+    notes_rows = spark.sql(notes_query).collect()
+    print(f"  Retrieved {len(notes_rows)} notes")
+
+    # Pivot in Python: get most recent note per type
+    notes_by_type = {}
+    for row in notes_rows:
+        note_type = row['ip_note_type']
+        # Use (contact_date, entry_datetime) as sort key for most recent
+        sort_key = (row['contact_date'], row['ent_inst_local_dttm'])
+
+        if note_type not in notes_by_type or sort_key > notes_by_type[note_type][0]:
+            notes_by_type[note_type] = (sort_key, row)
+
+    # Map notes to expected column names
+    for note_type, (id_col, csn_col, text_col) in NOTE_TYPE_MAP.items():
+        if note_type in notes_by_type:
+            _, row = notes_by_type[note_type]
+            clinical_data[id_col] = str(row['note_id']) if row['note_id'] else 'no id available'
+            clinical_data[csn_col] = str(row['note_csn_id']) if row['note_csn_id'] else 'no id available'
+            clinical_data[text_col] = row['note_text'] if row['note_text'] else 'No Note Available'
+        else:
+            clinical_data[id_col] = 'no id available'
+            clinical_data[csn_col] = 'no id available'
+            clinical_data[text_col] = 'No Note Available'
 
     return clinical_data
 
