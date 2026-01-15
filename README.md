@@ -10,66 +10,67 @@ Automated generation of DRG appeal letters for sepsis-related insurance denials.
 
 When insurance payors deny or downgrade sepsis DRG claims (870/871/872), this system generates professional appeal letters by:
 
-1. **Parsing denial letters** - LLM extracts payor, DRG codes, and determines if sepsis-related
-2. **Vector search** - Finds the most similar past denial from our gold standard library using embeddings
-3. **Learning from winners** - Uses the matched winning appeal as a template/guide
-4. **Applying clinical criteria** - Includes official Propel sepsis definitions
-5. **Generating appeals** - Creates patient-specific appeal letters using clinical notes from Clarity
+1. **Parsing denial letters** - OCR + LLM extracts payor, DRG codes, and determines if sepsis-related
+2. **Querying clinical data** - Pulls 14 note types from Epic Clarity for this specific account
+3. **Vector search** - Finds the most similar past denial from our gold standard library
+4. **Learning from winners** - Uses the matched winning appeal as a template/guide
+5. **Applying clinical criteria** - Includes official Propel sepsis definitions
+6. **Generating appeals** - Creates patient-specific appeal letters using clinical notes
 
-> **Note:** In the POC, the LLM extracts the HSP_ACCOUNT_ID and determines sepsis relevance from the denial letter text alone. Some denial letters are generic and don't contain DRG codes or diagnosis information, so they cannot be classified. In production, Epic workqueue integration will provide this context directly, enabling 100% coverage.
+**Single-Letter Processing:** Each denial is processed end-to-end in one run. This matches production workflow (Epic workqueue feeds one case at a time) and eliminates batch processing memory issues.
+
+> **POC vs Production:** In POC mode, the LLM extracts the account ID from denial letter text (some generic denials may lack this info). In production, Epic workqueue provides the account ID directly, enabling 100% coverage.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         KNOWLEDGE LAYER                                      │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                  │
-│  │    Propel    │    │    Gold      │    │   Clinical   │                  │
-│  │   Criteria   │    │   Letters    │    │    Notes     │                  │
-│  │  (propel_    │    │  (gold_      │    │   (Clarity)  │                  │
-│  │   data)      │    │   letters)   │    │              │                  │
-│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘                  │
-│         │                   │                   │                           │
-│         └─────────┬─────────┴─────────┬─────────┘                           │
-│                   ▼                   ▼                                     │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                        PIPELINE                                     │   │
-│  │                                                                     │   │
-│  │  [Denial PDF] ──► FEATURIZATION ──► [Inference Table]              │   │
-│  │                   • Extract text (Document Intelligence)            │   │
-│  │                   • Parse info (LLM: account ID, payor, DRGs)      │   │
-│  │                   • Generate embedding                              │   │
-│  │                   • Join with Clarity clinical notes                │   │
-│  │                                                                     │   │
-│  │  [Inference Table] ──► INFERENCE ──► [DOCX Letter]                 │   │
-│  │                        • Filter sepsis cases                        │   │
-│  │                        • Vector search gold letters                 │   │
-│  │                        • Include Propel definition                  │   │
-│  │                        • Generate appeal (LLM)                    │   │
-│  │                        • Export to DOCX for review                  │   │
-│  │                                                                     │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  [DOCX Letter] ──► CDI Review ──► Approved Letter ──► Send to Payor        │
+│                         KNOWLEDGE LAYER (One-Time Setup)                    │
+│  ┌──────────────┐    ┌──────────────┐                                      │
+│  │    Propel    │    │    Gold      │                                      │
+│  │   Criteria   │    │   Letters    │                                      │
+│  │  (propel_    │    │  (gold_      │                                      │
+│  │   data)      │    │   letters)   │                                      │
+│  └──────────────┘    └──────────────┘                                      │
+│         ▲                   ▲                                               │
+│         └─────────┬─────────┘                                               │
+│                   │                                                         │
+│          featurization.py (run once)                                        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PER-LETTER PROCESSING (inference.py)                     │
+│                                                                             │
+│  [Denial PDF] ──► inference.py ──► [DOCX Appeal Letter]                    │
+│                                                                             │
+│  Step 1: Parse PDF (Document Intelligence)                                  │
+│  Step 2: Extract denial info (LLM: account ID, payor, DRGs)                │
+│  Step 3: Query Clarity for this account's clinical notes                   │
+│  Step 4: Vector search for best gold letter match                          │
+│  Step 5: Extract clinical data from long notes (LLM)                       │
+│  Step 6: Generate appeal letter (LLM)                                      │
+│  Step 7: Export to DOCX                                                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+[DOCX Letter] ──► CDI Review ──► Approved Letter ──► Send to Payor
 ```
 
 ## Key Features
 
 | Feature | Description |
 |---------|-------------|
+| **Single-Letter Processing** | One denial at a time - no batch processing, no memory issues |
 | **Vector Search** | Embeddings-based similarity matching finds the most relevant past denial |
 | **Gold Letter Learning** | Uses winning appeals as templates - proven arguments get reused |
 | **Default Template Fallback** | When no good match found, uses default template as structural guide |
 | **Propel Integration** | LLM extracts key criteria from Propel PDFs into concise summaries |
 | **Comprehensive Clinical Notes** | Pulls 14 note types from Clarity (see below) |
 | **Smart Note Extraction** | Long notes (>8k chars) auto-extracted with timestamps via LLM |
-| **Validation Checkpoints** | Built-in checks verify paths, tables, and generation results |
 | **Timestamped Outputs** | Each run creates a new folder (output_YYYY-MM-DD_HHMMSS) |
 | **Human-in-the-Loop** | All letters output as DOCX for CDI review before sending |
-| **Scope Filtering** | Built for expansion - currently filtered to sepsis (870/871/872) |
-| **No Vendor Lock-in** | Runs entirely on existing Databricks/Azure infrastructure |
+| **Production-Ready** | Supports Epic workqueue integration via KNOWN_ACCOUNT_ID |
 
 ## Clinical Notes (from Epic Clarity)
 
@@ -92,8 +93,6 @@ The system pulls **14 sepsis-relevant note types** for comprehensive clinical ev
 | 70 | **Nursing Note** | Vital signs, observations |
 | 10000 | **Code Documentation** | Code events (if applicable) |
 
-Additional note types (OR notes, Therapy notes, etc.) are available but commented out. Uncomment as needed for other conditions.
-
 **Note Extraction**: Long notes (>8k chars) are automatically extracted via LLM to pull relevant clinical data with timestamps, reducing token usage while preserving key evidence.
 
 ## Repository Structure
@@ -101,12 +100,12 @@ Additional note types (OR notes, Therapy notes, etc.) are available but commente
 ```
 SEPSIS/
 ├── data/
-│   └── featurization.py      # Data ingestion and preparation
+│   └── featurization.py      # ONE-TIME: Knowledge base ingestion
 ├── model/
-│   └── inference.py          # Letter generation
+│   └── inference.py          # MAIN: Single-letter processing
 ├── utils/
 │   ├── gold_standard_appeals/  # Past winning appeal letters (PDFs) + default template
-│   ├── sample_denial_letters/  # New denial letters to process (PDFs)
+│   ├── sample_denial_letters/  # Denial letters to test with (PDFs)
 │   ├── propel_data/            # Clinical criteria definitions (PDFs)
 │   └── outputs/                # Generated appeal letters (DOCX)
 ├── docs/
@@ -122,8 +121,8 @@ SEPSIS/
 |-------|---------|
 | `dev.fin_ds.fudgesicle_gold_letters` | Past winning appeals with denial embeddings |
 | `dev.fin_ds.fudgesicle_propel_data` | Official clinical criteria (sepsis definition) |
-| `dev.fin_ds.fudgesicle_inference` | Denial cases ready for processing |
-| `dev.fin_ds.fudgesicle_inference_score` | Generated appeal letters |
+
+Note: No intermediate inference tables needed - single-letter processing queries Clarity directly.
 
 ## Quick Start (Databricks)
 
@@ -132,7 +131,6 @@ SEPSIS/
 Copy files to Databricks notebooks and set the paths:
 ```python
 GOLD_LETTERS_PATH = "/Workspace/Repos/your-user/fudgesicle/utils/gold_standard_appeals"
-DENIAL_LETTERS_PATH = "/Workspace/Repos/your-user/fudgesicle/utils/sample_denial_letters"
 PROPEL_DATA_PATH = "/Workspace/Repos/your-user/fudgesicle/utils/propel_data"
 ```
 
@@ -152,53 +150,43 @@ RUN_PROPEL_INGESTION = True
 ```
 Run the notebook. This reads PDF files from `propel_data/`, extracts key clinical criteria via LLM, and stores in `fudgesicle_propel_data`.
 
-### 4. Process New Denial Letters
+### 4. Process a Denial Letter
 
-In `featurization.py`:
+In `inference.py`, set the input:
 ```python
-RUN_DENIAL_PROCESSING = True
-RUN_DENIAL_FEATURIZATION = True
-WRITE_TO_TABLE = True
-```
-Run the notebook. This:
-- Extracts text from denial PDFs
-- Uses LLM to extract account ID, payor, DRGs, sepsis flag
-- Generates embeddings
-- Joins with Clarity clinical notes
-- Writes to `fudgesicle_inference`
+# Path to the denial PDF
+DENIAL_PDF_PATH = "/path/to/denial_letter.pdf"
 
-### 5. Generate Appeal Letters
-
-In `inference.py`:
-```python
-WRITE_TO_TABLE = True   # Optional: persist to score table
-EXPORT_TO_DOCX = True   # Generate Word documents
+# Optional: If account ID is known (production mode)
+KNOWN_ACCOUNT_ID = None  # or "12345678"
 ```
-Run the notebook. For each sepsis case:
+
+Run the notebook. For this denial:
+- Parses PDF and extracts denial info
+- Queries Clarity for clinical notes (14 note types)
 - Finds best matching gold letter via vector search
 - Includes Propel sepsis definition
 - Generates appeal using clinical notes
-- Exports DOCX to `output/` folder
+- Exports DOCX to `outputs/` folder
 
-## Configuration Flags
+## Configuration
 
-### featurization.py
+### featurization.py (One-Time Setup)
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `RUN_GOLD_INGESTION` | False | Process gold standard letter PDFs |
-| `RUN_PROPEL_INGESTION` | False | Process Propel definition DOCX files |
-| `RUN_DENIAL_PROCESSING` | False | Process new denial letter PDFs |
-| `RUN_DENIAL_FEATURIZATION` | False | Join with Clarity and write to table |
-| `WRITE_TO_TABLE` | False | Write results to Unity Catalog |
+| `RUN_PROPEL_INGESTION` | False | Process Propel definition PDFs |
 
-### inference.py
+### inference.py (Per-Letter Processing)
 
-| Flag | Default | Description |
-|------|---------|-------------|
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `DENIAL_PDF_PATH` | (required) | Path to denial letter PDF |
+| `KNOWN_ACCOUNT_ID` | None | Account ID if known (production) |
 | `SCOPE_FILTER` | "sepsis" | Which denial types to process |
 | `MATCH_SCORE_THRESHOLD` | 0.7 | Minimum similarity to use gold letter |
-| `WRITE_TO_TABLE` | False | Persist generated letters to score table |
+| `NOTE_EXTRACTION_THRESHOLD` | 8000 | Char limit before LLM extraction |
 | `EXPORT_TO_DOCX` | True | Export letters as Word documents |
 
 ## Technology Stack
@@ -213,20 +201,6 @@ Run the notebook. For each sepsis case:
 | Clinical Data | Epic Clarity |
 | Runtime | Databricks Runtime 15.4 LTS ML |
 
-## Validation
-
-Run queries from `test_queries.sql` to verify data:
-
-```sql
--- Check inference table has all columns populated
-SELECT
-    COUNT(*) as total_rows,
-    COUNT(denial_letter_text) as has_denial_text,
-    COUNT(denial_embedding) as has_embedding,
-    SUM(CASE WHEN is_sepsis THEN 1 ELSE 0 END) as sepsis_count
-FROM dev.fin_ds.fudgesicle_inference;
-```
-
 ## Extending to Other Conditions
 
 The architecture supports any denial type. To add a new condition (e.g., pneumonia):
@@ -234,7 +208,7 @@ The architecture supports any denial type. To add a new condition (e.g., pneumon
 1. **Add clinical criteria**: Place `propel_pneumonia.pdf` in `utils/propel_data/`
 2. **Add gold letters**: Add winning pneumonia appeals to `gold_standard_appeals/`
 3. **Update scope filter**: Modify `SCOPE_FILTER` logic in inference.py
-4. **Run ingestion**: Re-run with ingestion flags enabled
+4. **Run ingestion**: Re-run featurization.py with ingestion flags enabled
 
 No architectural changes needed - the same pipeline handles any denial type.
 

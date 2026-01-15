@@ -1,6 +1,6 @@
 # Sepsis Appeal Engine - Master Prompt
 
-**Last Updated:** 2026-01-14
+**Last Updated:** 2026-01-15
 **Repo:** https://github.com/michaeljoyce217/SEPSIS
 
 ---
@@ -9,7 +9,7 @@
 
 **Goal:** Automated generation of DRG appeal letters for sepsis-related insurance denials (DRG 870/871/872).
 
-**Architecture:** Multi-agent AI pipeline using Azure OpenAI GPT-4.1
+**Architecture:** Single-letter processing pipeline using Azure OpenAI GPT-4.1
 
 **Platform:** Databricks on Azure with Unity Catalog
 
@@ -20,9 +20,9 @@
 ```
 SEPSIS/
 ├── data/
-│   └── featurization.py        # Data ingestion and preparation (Parser Agent)
+│   └── featurization.py        # ONE-TIME: Knowledge base ingestion (gold letters + propel)
 ├── model/
-│   └── inference.py            # Letter generation (Writer Agent + vector search)
+│   └── inference.py            # MAIN: Single-letter end-to-end processing
 ├── utils/
 │   ├── gold_standard_appeals/  # Past winning appeal letters (PDFs) + default template
 │   ├── sample_denial_letters/  # New denial letters to process (PDFs)
@@ -38,24 +38,29 @@ SEPSIS/
 
 ---
 
-## Multi-Agent Pipeline
+## Pipeline Architecture
 
-### Stage 1: Featurization (data/featurization.py)
+### One-Time Setup: featurization.py
+Run once to populate knowledge base tables:
 
-| Agent | Technology | Function |
-|-------|------------|----------|
-| Document Intel | Azure AI Document Intelligence | OCR extraction from PDF |
-| Parser | GPT-4.1 | Extract: account_id, payor, DRGs, is_sepsis |
-| Embedding | text-embedding-ada-002 | Generate 1536-dim denial vector |
-| Clarity Join | Spark SQL | Attach 14 clinical note types |
+| Step | Technology | Function |
+|------|------------|----------|
+| Gold Letter Parsing | Azure AI Document Intelligence + GPT-4.1 | Extract appeal/denial from gold PDFs |
+| Denial Embedding | text-embedding-ada-002 | Generate 1536-dim vectors for similarity search |
+| Propel Extraction | GPT-4.1 | Extract key clinical criteria from Propel PDFs |
 
-### Stage 2: Inference (model/inference.py)
+### Per-Letter Processing: inference.py
+Run for each denial letter:
 
-| Agent | Technology | Function |
-|-------|------------|----------|
-| Retrieval | Cosine Similarity | Find best-matching gold letter |
-| Extraction (x14) | GPT-4.1 (parallel) | Extract clinical data with timestamps |
-| Writer | GPT-4.1 | Generate appeal letter |
+| Step | Technology | Function |
+|------|------------|----------|
+| 1. PDF Parse | Azure AI Document Intelligence | OCR extraction from denial PDF |
+| 2. Info Extract | GPT-4.1 | Extract: account_id, payor, DRGs, is_sepsis |
+| 3. Clarity Query | Spark SQL | Get 14 clinical note types for this account |
+| 4. Vector Search | Cosine Similarity | Find best-matching gold letter |
+| 5. Note Extraction | GPT-4.1 (parallel) | Extract clinical data with timestamps from long notes |
+| 6. Letter Generation | GPT-4.1 | Generate appeal using gold letter + clinical evidence |
+| 7. Export | python-docx | Output DOCX for CDI review |
 
 ---
 
@@ -65,8 +70,8 @@ SEPSIS/
 |-------|---------|
 | `dev.fin_ds.fudgesicle_gold_letters` | Past winning appeals with denial embeddings |
 | `dev.fin_ds.fudgesicle_propel_data` | Official clinical criteria (definition_summary for prompts) |
-| `dev.fin_ds.fudgesicle_inference` | Denial cases with clinical notes |
-| `dev.fin_ds.fudgesicle_inference_score` | Generated appeal letters |
+
+Note: No intermediate inference tables - single-letter processing queries Clarity directly.
 
 ---
 
@@ -84,11 +89,11 @@ Full Propel PDFs are processed at ingestion time - LLM extracts key clinical cri
 ### Default Template Fallback
 When vector search doesn't find a good match (score < 0.7), the system falls back to `default_sepsis_appeal_template.docx` as a structural guide.
 
-### Validation Checkpoints
-Both featurization.py and inference.py include checkpoint functions that validate:
-- Path existence and file counts
-- Table structure and row counts
-- Generation results
+### Single-Letter Processing
+Each denial is processed end-to-end in one run - no batch processing, no intermediate tables. This:
+- Eliminates driver memory issues
+- Matches production workflow (Epic workqueue feeds one case at a time)
+- Simplifies debugging and testing
 
 ### Timestamped Output Folders
 Each inference run creates a new folder: `utils/outputs/output_YYYY-MM-DD_HHMMSS/`
@@ -102,23 +107,24 @@ Each inference run creates a new folder: `utils/outputs/output_YYYY-MM-DD_HHMMSS
 |------|---------|-------------|
 | `RUN_GOLD_INGESTION` | False | Process gold standard letter PDFs |
 | `RUN_PROPEL_INGESTION` | False | Process Propel definition PDFs |
-| `RUN_DENIAL_PROCESSING` | False | Process new denial letter PDFs |
-| `RUN_DENIAL_FEATURIZATION` | False | Join with Clarity and write to table |
-| `WRITE_TO_TABLE` | False | Write results to Unity Catalog |
 
 ### inference.py Settings
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `DENIAL_PDF_PATH` | (required) | Path to denial letter PDF to process |
+| `KNOWN_ACCOUNT_ID` | None | Account ID (if known from Epic workqueue) |
 | `SCOPE_FILTER` | "sepsis" | Which denial types to process |
 | `MATCH_SCORE_THRESHOLD` | 0.7 | Minimum similarity for gold letter match |
 | `NOTE_EXTRACTION_THRESHOLD` | 8000 | Char limit before LLM extraction |
-| `WRITE_TO_TABLE` | False | Persist to score table |
 | `EXPORT_TO_DOCX` | True | Export as Word documents |
 
 ---
 
-### POC Limitation
-In the POC, the LLM extracts account ID and sepsis relevance from denial letter text alone. Some generic denials lack DRG codes or diagnosis information and cannot be classified. In production, Epic workqueue integration will provide this context directly, enabling 100% coverage.
+### POC vs Production
+
+**POC Mode:** Set `KNOWN_ACCOUNT_ID = None` - LLM extracts account ID from denial letter text. Some generic denials may lack identifiable information.
+
+**Production Mode:** Set `KNOWN_ACCOUNT_ID = "12345678"` - Epic workqueue provides account ID directly, enabling 100% coverage.
 
 ---
 
@@ -130,11 +136,18 @@ In the POC, the LLM extracts account ID and sepsis relevance from denial letter 
    dbutils.library.restartPython()
    ```
 
-2. **Run featurization.py** with appropriate flags enabled
+2. **One-time setup** - Run `featurization.py` with flags enabled:
+   ```python
+   RUN_GOLD_INGESTION = True   # First run
+   RUN_PROPEL_INGESTION = True # First run
+   ```
 
-3. **Run inference.py** to generate appeal letters
+3. **Process a denial** - In `inference.py`, set the PDF path:
+   ```python
+   DENIAL_PDF_PATH = "/path/to/denial.pdf"
+   ```
 
-4. **Review DOCX outputs** in `utils/outputs/output_<timestamp>/`
+4. **Review output** in `utils/outputs/output_<timestamp>/`
 
 ---
 
