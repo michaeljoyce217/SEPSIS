@@ -68,7 +68,7 @@ When insurance payors deny or downgrade sepsis DRG claims (870/871/872), this sy
 | **Propel Integration** | LLM extracts key criteria from Propel PDFs into concise summaries |
 | **Comprehensive Clinical Notes** | Pulls 14 note types from Clarity (see below) |
 | **Smart Note Extraction** | Long notes (>8k chars) auto-extracted with timestamps via LLM |
-| **Timestamped Outputs** | Each run creates a new folder (output_YYYY-MM-DD_HHMMSS) |
+| **Simple Output** | Appeals saved to `outputs/` as `{account_id}_{patient}_appeal.docx` |
 | **Human-in-the-Loop** | All letters output as DOCX for CDI review before sending |
 | **Production-Ready** | Supports Epic workqueue integration via KNOWN_ACCOUNT_ID |
 

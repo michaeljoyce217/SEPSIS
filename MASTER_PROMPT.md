@@ -95,8 +95,8 @@ Each denial is processed end-to-end in one run - no batch processing, no interme
 - Matches production workflow (Epic workqueue feeds one case at a time)
 - Simplifies debugging and testing
 
-### Timestamped Output Folders
-Each inference run creates a new folder: `utils/outputs/output_YYYY-MM-DD_HHMMSS/`
+### Output Location
+Appeal letters are saved to `utils/outputs/` with filename format: `{account_id}_{patient_name}_appeal.docx`
 
 ---
 

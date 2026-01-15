@@ -802,10 +802,8 @@ else:
                 from docx import Document
                 from docx.shared import Pt
 
-                # Create timestamped output folder
-                run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-                DOCX_OUTPUT_PATH = os.path.join(DOCX_OUTPUT_BASE, f"output_{run_timestamp}")
-                os.makedirs(DOCX_OUTPUT_PATH, exist_ok=True)
+                # Ensure output folder exists
+                os.makedirs(DOCX_OUTPUT_BASE, exist_ok=True)
 
                 # Create document
                 doc = Document()
@@ -836,7 +834,7 @@ else:
                 patient_name = clinical_data.get('formatted_name', 'Unknown')
                 safe_name = "".join(c for c in patient_name if c.isalnum() or c in (' ', '-', '_')).strip()
                 filename = f"{account_id}_{safe_name}_appeal.docx"
-                filepath = os.path.join(DOCX_OUTPUT_PATH, filename)
+                filepath = os.path.join(DOCX_OUTPUT_BASE, filename)
                 doc.save(filepath)
 
                 print(f"  Saved: {filepath}")
