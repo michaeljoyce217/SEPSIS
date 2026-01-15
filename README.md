@@ -59,8 +59,12 @@ When insurance payors deny or downgrade sepsis DRG claims (870/871/872), this sy
 |---------|-------------|
 | **Vector Search** | Embeddings-based similarity matching finds the most relevant past denial |
 | **Gold Letter Learning** | Uses winning appeals as templates - proven arguments get reused |
-| **Propel Integration** | Official clinical criteria injected into prompts |
-| **Comprehensive Clinical Notes** | Pulls 7 note types from Clarity (see below) |
+| **Default Template Fallback** | When no good match found, uses default template as structural guide |
+| **Propel Integration** | LLM extracts key criteria from Propel PDFs into concise summaries |
+| **Comprehensive Clinical Notes** | Pulls 14 note types from Clarity (see below) |
+| **Smart Note Extraction** | Long notes (>8k chars) auto-extracted with timestamps via LLM |
+| **Validation Checkpoints** | Built-in checks verify paths, tables, and generation results |
+| **Timestamped Outputs** | Each run creates a new folder (output_YYYY-MM-DD_HHMMSS) |
 | **Human-in-the-Loop** | All letters output as DOCX for CDI review before sending |
 | **Scope Filtering** | Built for expansion - currently filtered to sepsis (870/871/872) |
 | **No Vendor Lock-in** | Runs entirely on existing Databricks/Azure infrastructure |
