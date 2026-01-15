@@ -1291,6 +1291,9 @@ if RUN_DENIAL_FEATURIZATION and len(TARGET_ACCOUNTS) > 0:
         joined_df = joined_df.withColumn("scope_filter", lit(SCOPE_FILTER))
         joined_df = joined_df.withColumn("featurization_timestamp", lit(datetime.now().isoformat()))
 
+        # Cache to prevent re-computation on write
+        joined_df.cache()
+
         final_count = joined_df.count()
         print(f"\nFeaturized {final_count} rows with embeddings")
     else:
