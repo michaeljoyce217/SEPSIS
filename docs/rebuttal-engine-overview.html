@@ -563,6 +563,10 @@
                         Generates embeddings for vector search and joins with <strong>14 clinical note types</strong>
                         from Clarity (Progress Notes, Consults, H&P, Discharge Summary, ED Notes, and more).
                     </p>
+                    <p style="font-size: 0.9rem; color: #666; margin-top: 0.5rem;">
+                        <em><strong>Note:</strong> In the POC, the LLM extracts the HSP_ACCOUNT_ID from the denial letter text.
+                        In production, this will be replaced by Epic workqueue integration where the account ID is already known.</em>
+                    </p>
                 </div>
             </div>
 
@@ -895,7 +899,7 @@
                 <tr>
                     <td><strong>Parser</strong></td>
                     <td>GPT-4.1</td>
-                    <td>Extract structured fields from denial text</td>
+                    <td>Extract structured fields from denial text*</td>
                     <td>account_id, payor, DRGs, is_sepsis</td>
                 </tr>
                 <tr>
@@ -923,6 +927,9 @@
                     <td>Persuasive appeal text</td>
                 </tr>
             </table>
+            <p style="font-size: 0.85rem; color: #666; margin-top: -0.5rem;">
+                <em>*POC only: account_id is extracted by LLM from denial text. In production, this will come from Epic workqueue integration.</em>
+            </p>
 
             <h3>Why Multi-Agent Architecture?</h3>
             <div class="benefit-grid">

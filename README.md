@@ -10,11 +10,13 @@ Automated generation of DRG appeal letters for sepsis-related insurance denials.
 
 When insurance payors deny or downgrade sepsis DRG claims (870/871/872), this system generates professional appeal letters by:
 
-1. **Parsing denial letters** - LLM extracts payor, DRG codes, account ID, and determines if sepsis-related
+1. **Parsing denial letters** - LLM extracts payor, DRG codes, and determines if sepsis-related
 2. **Vector search** - Finds the most similar past denial from our gold standard library using embeddings
 3. **Learning from winners** - Uses the matched winning appeal as a template/guide
 4. **Applying clinical criteria** - Includes official Propel sepsis definitions
 5. **Generating appeals** - Creates patient-specific appeal letters using clinical notes from Clarity
+
+> **Note:** In the POC, the LLM also extracts the HSP_ACCOUNT_ID from the denial letter text. In production, this will be replaced by Epic workqueue integration where the account ID is already known.
 
 ## Architecture
 
