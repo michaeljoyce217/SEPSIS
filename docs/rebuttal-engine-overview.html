@@ -632,12 +632,24 @@
             </table>
 
             <div class="callout">
-                <h4>Smart Note Extraction</h4>
+                <h4>Smart Note Extraction with SOFA Prioritization</h4>
                 <p>
                     Long clinical notes (>8,000 characters) are automatically processed by LLM to extract
-                    relevant clinical data <strong>with timestamps</strong>. This ensures the writer receives
-                    focused, timestamped evidence (e.g., "03/15/2024 08:00: Lactate 4.2, MAP 63") rather than
-                    overwhelming raw text. Shorter notes pass through unchanged.
+                    relevant clinical data <strong>with timestamps</strong>. The extraction prioritizes
+                    <strong>SOFA score components</strong> for quantifying organ dysfunction:
+                </p>
+                <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                    <li><strong>Respiration:</strong> PaO2/FiO2 ratio, oxygen requirements</li>
+                    <li><strong>Coagulation:</strong> Platelet count</li>
+                    <li><strong>Liver:</strong> Bilirubin</li>
+                    <li><strong>Cardiovascular:</strong> MAP, vasopressor use with doses</li>
+                    <li><strong>CNS:</strong> GCS (Glasgow Coma Scale)</li>
+                    <li><strong>Renal:</strong> Creatinine, urine output</li>
+                </ul>
+                <p style="margin-top: 0.5rem;">
+                    Also extracts lactate trends, infection evidence, and antibiotic timing. This gives the
+                    writer concrete, timestamped evidence (e.g., "03/15/2024 08:00: MAP 63, on norepinephrine 0.1 mcg/kg/min")
+                    to quantify sepsis severity.
                 </p>
             </div>
 
