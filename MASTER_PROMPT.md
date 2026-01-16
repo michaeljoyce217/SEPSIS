@@ -1,6 +1,6 @@
 # Sepsis Appeal Engine - Master Prompt
 
-**Last Updated:** 2026-01-15
+**Last Updated:** 2026-01-16
 **Repo:** https://github.com/michaeljoyce217/SEPSIS
 
 ---
@@ -12,6 +12,8 @@
 **Architecture:** Single-letter processing pipeline using Azure OpenAI GPT-4.1
 
 **Platform:** Databricks on Azure with Unity Catalog
+
+**Status:** POC Complete - Ready for production Epic workqueue integration
 
 ---
 
@@ -27,7 +29,7 @@ SEPSIS/
 │   ├── gold_standard_appeals/  # Past winning appeal letters (PDFs) + default template
 │   ├── sample_denial_letters/  # New denial letters to process (PDFs)
 │   ├── propel_data/            # Clinical criteria definitions (PDFs)
-│   └── outputs/                # Generated appeal letters (timestamped folders)
+│   └── outputs/                # Generated appeal letters (DOCX files)
 ├── docs/
 │   └── rebuttal-engine-overview.html  # Executive overview with Technical Architecture
 ├── compare_denials.py          # Utility: check for duplicate denials
@@ -56,11 +58,11 @@ Run for each denial letter:
 |------|------------|----------|
 | 1. PDF Parse | Azure AI Document Intelligence | OCR extraction from denial PDF |
 | 2. Vector Search | Cosine Similarity | Find best-matching gold letter (uses denial text only) |
-| 3. Info Extract | GPT-4.1 | Extract: account_id, payor, DRGs, is_sepsis |
-| 4. Clarity Query | Spark SQL | Get 14 clinical note types for this account |
-| 5. Note Extraction | GPT-4.1 (parallel) | Extract clinical data with timestamps from long notes |
+| 3. Info Extract | GPT-4.1 | Extract: account_id, payor, DRGs, is_sepsis (conservative - no hallucination) |
+| 4. Clarity Query | Spark SQL (optimized) | Get 14 clinical note types for this account |
+| 5. Note Extraction | GPT-4.1 | Extract SOFA components + clinical data with timestamps |
 | 6. Letter Generation | GPT-4.1 | Generate appeal using gold letter + clinical evidence |
-| 7. Export | python-docx | Output DOCX for CDI review |
+| 7. Export | python-docx | Output DOCX with markdown bold parsing |
 
 ---
 
@@ -80,8 +82,24 @@ Note: No intermediate inference tables - single-letter processing queries Clarit
 ### 14 Clinical Note Types (from Epic Clarity)
 Progress Notes, Consults, H&P, Discharge Summary, ED Notes, Initial Assessments, ED Triage Notes, ED Provider Notes, Addendum Note, Hospital Course, Subjective & Objective, Assessment & Plan Note, Nursing Note, Code Documentation
 
+### SOFA Score Extraction (NEW)
+Note extraction prioritizes organ dysfunction data for quantifying sepsis severity:
+- **Respiration:** PaO2/FiO2 ratio, oxygen requirements
+- **Coagulation:** Platelet count
+- **Liver:** Bilirubin
+- **Cardiovascular:** MAP, vasopressor use with doses
+- **CNS:** GCS (Glasgow Coma Scale)
+- **Renal:** Creatinine, urine output
+- **Plus:** Lactate trends, infection evidence, antibiotic timing
+
 ### Smart Note Extraction
 Notes >8,000 chars are automatically extracted via LLM to pull relevant clinical data WITH timestamps (e.g., "03/15/2024 08:00: Lactate 4.2, MAP 63").
+
+### Conservative DRG Extraction
+Parser only extracts DRG codes if explicitly stated as numbers in the denial letter. Returns "Unknown" rather than hallucinating plausible codes.
+
+### Markdown Bold Parsing
+DOCX export converts markdown bold (`**text**`) to actual Word bold formatting for professional output.
 
 ### Propel Definition Summary
 Full Propel PDFs are processed at ingestion time - LLM extracts key clinical criteria into `definition_summary` field for efficient prompt inclusion.
@@ -120,6 +138,29 @@ Appeal letters are saved to `utils/outputs/` with filename format: `{account_id}
 
 ---
 
+## Cost Estimates
+
+Based on Azure OpenAI GPT-4.1 standard pricing ($2.20/1M input, $8.80/1M output):
+
+### Per Appeal Letter (~$0.20)
+| Step | Input Tokens | Output Tokens | Cost |
+|------|-------------|---------------|------|
+| Denial info extraction | ~4,000 | ~100 | $0.01 |
+| Note extraction (4 calls avg) | ~12,000 | ~3,200 | $0.05 |
+| Appeal letter generation | ~50,000 | ~3,000 | $0.14 |
+| **Total** | ~66,000 | ~6,300 | **~$0.20** |
+
+### Monthly Projections
+| Volume | LLM Cost |
+|--------|----------|
+| 100 appeals/month | ~$20 |
+| 500 appeals/month | ~$100 |
+| 1,000 appeals/month | ~$200 |
+
+**One-time setup:** <$1 for gold letter + Propel ingestion
+
+---
+
 ### POC vs Production
 
 **POC Mode:** Set `KNOWN_ACCOUNT_ID = None` - LLM extracts account ID from denial letter text. Some generic denials may lack identifiable information.
@@ -147,7 +188,7 @@ Appeal letters are saved to `utils/outputs/` with filename format: `{account_id}
    DENIAL_PDF_PATH = "/path/to/denial.pdf"
    ```
 
-4. **Review output** in `utils/outputs/output_<timestamp>/`
+4. **Review output** in `utils/outputs/`
 
 ---
 
