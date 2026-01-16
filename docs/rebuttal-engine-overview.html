@@ -653,6 +653,25 @@
                 </p>
             </div>
 
+            <div class="callout">
+                <h4>Conservative DRG Extraction</h4>
+                <p>
+                    The denial parser only extracts DRG codes if they are <strong>explicitly stated as numbers</strong>
+                    in the denial letter. If the letter just says "adjusted" or "changed" without specific codes,
+                    the system returns "Unknown" rather than hallucinating plausible DRG numbers. This prevents
+                    incorrect information from appearing in appeal letters.
+                </p>
+            </div>
+
+            <div class="callout">
+                <h4>Markdown Bold Parsing</h4>
+                <p>
+                    The DOCX export automatically converts markdown bold syntax (<code>**text**</code>) to actual
+                    Word bold formatting. Headings like "**Justifications for Appeal:**" render as proper bold text
+                    in the final document, ensuring professional output without manual formatting.
+                </p>
+            </div>
+
             <h3>Human-in-the-Loop Workflow</h3>
             <div class="callout">
                 <h4>AI Assists, Humans Decide</h4>

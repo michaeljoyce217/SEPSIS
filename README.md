@@ -70,6 +70,8 @@ When insurance payors deny or downgrade sepsis DRG claims (870/871/872), this sy
 | **Comprehensive Clinical Notes** | Pulls 14 note types from Clarity (see below) |
 | **Smart Note Extraction** | Long notes (>8k chars) auto-extracted with timestamps via LLM |
 | **SOFA Score Extraction** | Prioritizes organ dysfunction data: lactate, MAP, creatinine, platelets, bilirubin, GCS, PaO2/FiO2 |
+| **Conservative DRG Extraction** | Only extracts DRGs if explicitly stated - no hallucination of plausible codes |
+| **Markdown Bold Parsing** | `**text**` in LLM output renders as bold in DOCX |
 | **Simple Output** | Appeals saved to `outputs/` as `{account_id}_{patient}_appeal.docx` |
 | **Human-in-the-Loop** | All letters output as DOCX for CDI review before sending |
 | **Production-Ready** | Supports Epic workqueue integration via KNOWN_ACCOUNT_ID |
