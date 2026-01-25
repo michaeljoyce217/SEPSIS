@@ -22,20 +22,22 @@
 ```
 SEPSIS/
 ├── data/
-│   └── featurization.py        # ONE-TIME: Knowledge base ingestion (gold letters + propel)
+│   ├── featurization.py              # ONE-TIME: Knowledge base ingestion (gold letters + propel)
+│   └── structured_data_ingestion.py  # PER-ACCOUNT: Labs, vitals, meds, procedures, ICD-10
 ├── model/
-│   └── inference.py            # MAIN: Single-letter end-to-end processing
+│   └── inference.py                  # MAIN: Single-letter end-to-end processing
 ├── utils/
-│   ├── gold_standard_appeals/  # Past winning appeal letters (PDFs) + default template
-│   ├── sample_denial_letters/  # New denial letters to process (PDFs)
-│   ├── propel_data/            # Clinical criteria definitions (PDFs)
-│   └── outputs/                # Generated appeal letters (DOCX files)
+│   ├── gold_standard_appeals/        # Past winning appeal letters (PDFs) + default template
+│   ├── sample_denial_letters/        # New denial letters to process (PDFs)
+│   ├── propel_data/                  # Clinical criteria definitions (PDFs)
+│   └── outputs/                      # Generated appeal letters (DOCX files)
 ├── docs/
-│   └── rebuttal-engine-overview.html  # Executive overview with Technical Architecture
-├── compare_denials.py          # Utility: check for duplicate denials
-├── test_queries.sql            # Validation queries for Unity Catalog
-├── README.md                   # Project documentation
-└── MASTER_PROMPT.md            # This file
+│   ├── plans/                        # Design documents
+│   └── rebuttal-engine-overview.html # Executive overview with Technical Architecture
+├── compare_denials.py                # Utility: check for duplicate denials
+├── test_queries.sql                  # Validation queries for Unity Catalog
+├── README.md                         # Project documentation
+└── claude.md                         # This file (master prompt)
 ```
 
 ---
@@ -50,6 +52,19 @@ Run once to populate knowledge base tables:
 | Gold Letter Parsing | Azure AI Document Intelligence + GPT-4.1 | Extract appeal/denial from gold PDFs |
 | Denial Embedding | text-embedding-ada-002 | Generate 1536-dim vectors for similarity search |
 | Propel Extraction | GPT-4.1 | Extract key clinical criteria from Propel PDFs |
+
+### Per-Account Data: structured_data_ingestion.py
+Queries Clarity structured data and writes to intermediate tables:
+
+| Table | Contents |
+|-------|----------|
+| `herald_train_labs` | Lab results with timestamps (lactate, CBC, BMP, LFTs, cultures) |
+| `herald_train_vitals` | Vital signs (temp, HR, RR, BP, MAP, SpO2, GCS, UO) |
+| `herald_train_meds` | Medication administrations (antibiotics, vasopressors, fluids) |
+| `herald_train_procedures` | Procedures (lines, intubation, dialysis) |
+| `herald_train_icd10` | ICD-10 diagnosis codes |
+
+Data is merged into chronological timeline, then LLM extracts sepsis-relevant information.
 
 ### Per-Letter Processing: inference.py
 Run for each denial letter:
@@ -69,12 +84,22 @@ Run for each denial letter:
 
 ## Unity Catalog Tables
 
+### Knowledge Base (populated by featurization.py)
+
 | Table | Purpose |
 |-------|---------|
 | `dev.fin_ds.fudgesicle_gold_letters` | Past winning appeals with denial embeddings |
 | `dev.fin_ds.fudgesicle_propel_data` | Official clinical criteria (definition_summary for prompts) |
 
-Note: No intermediate inference tables - single-letter processing queries Clarity directly.
+### Structured Data (populated by structured_data_ingestion.py)
+
+| Table | Purpose |
+|-------|---------|
+| `dev.fin_ds.herald_train_labs` | Lab results with timestamps |
+| `dev.fin_ds.herald_train_vitals` | Vital signs with timestamps |
+| `dev.fin_ds.herald_train_meds` | Medication administrations |
+| `dev.fin_ds.herald_train_procedures` | Procedures performed |
+| `dev.fin_ds.herald_train_icd10` | ICD-10 diagnosis codes |
 
 ---
 
