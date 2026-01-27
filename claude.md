@@ -1,6 +1,6 @@
 # Sepsis Appeal Engine - Master Prompt
 
-**Last Updated:** 2026-01-16
+**Last Updated:** 2026-01-25
 **Repo:** https://github.com/michaeljoyce217/SEPSIS
 
 ---
@@ -58,11 +58,11 @@ Queries Clarity structured data and writes to intermediate tables:
 
 | Table | Contents |
 |-------|----------|
-| `herald_train_labs` | Lab results with timestamps (lactate, CBC, BMP, LFTs, cultures) |
-| `herald_train_vitals` | Vital signs (temp, HR, RR, BP, MAP, SpO2, GCS, UO) |
-| `herald_train_meds` | Medication administrations (antibiotics, vasopressors, fluids) |
-| `herald_train_procedures` | Procedures (lines, intubation, dialysis) |
-| `herald_train_icd10` | ICD-10 diagnosis codes |
+| `fudgesicle_labs` | Lab results with timestamps (lactate, CBC, BMP, LFTs, cultures) |
+| `fudgesicle_vitals` | Vital signs (temp, HR, RR, BP, MAP, SpO2, GCS, UO) |
+| `fudgesicle_meds` | Medication administrations (antibiotics, vasopressors, fluids) |
+| `fudgesicle_procedures` | Procedures (lines, intubation, dialysis) |
+| `fudgesicle_icd10` | ICD-10 diagnosis codes |
 
 Data is merged into chronological timeline, then LLM extracts sepsis-relevant information.
 
@@ -75,8 +75,9 @@ Run for each denial letter:
 | 2. Vector Search | Cosine Similarity | Find best-matching gold letter (uses denial text only) |
 | 3. Info Extract | GPT-4.1 | Extract: account_id, payor, DRGs, is_sepsis (conservative - no hallucination) |
 | 4. Clarity Query | Spark SQL (optimized) | Get 14 clinical note types for this account |
-| 5. Note Extraction | GPT-4.1 | Extract SOFA components + clinical data with timestamps |
-| 6. Letter Generation | GPT-4.1 | Generate appeal using gold letter + clinical evidence |
+| 5a. Note Extraction | GPT-4.1 | Extract SOFA components + clinical data with timestamps |
+| 5b. Structured Data | GPT-4.1 | Extract sepsis-relevant info from labs, vitals, meds, procedures |
+| 6. Letter Generation | GPT-4.1 | Generate appeal using gold letter + clinical evidence + structured data |
 | 6.5. Strength Assessment | GPT-4.1 | Evaluate letter against Propel criteria, argument structure, evidence quality |
 | 7. Export | python-docx | Output DOCX with assessment section + markdown bold parsing |
 
@@ -95,11 +96,11 @@ Run for each denial letter:
 
 | Table | Purpose |
 |-------|---------|
-| `dev.fin_ds.herald_train_labs` | Lab results with timestamps |
-| `dev.fin_ds.herald_train_vitals` | Vital signs with timestamps |
-| `dev.fin_ds.herald_train_meds` | Medication administrations |
-| `dev.fin_ds.herald_train_procedures` | Procedures performed |
-| `dev.fin_ds.herald_train_icd10` | ICD-10 diagnosis codes |
+| `dev.fin_ds.fudgesicle_labs` | Lab results with timestamps |
+| `dev.fin_ds.fudgesicle_vitals` | Vital signs with timestamps |
+| `dev.fin_ds.fudgesicle_meds` | Medication administrations |
+| `dev.fin_ds.fudgesicle_procedures` | Procedures performed |
+| `dev.fin_ds.fudgesicle_icd10` | ICD-10 diagnosis codes |
 
 ---
 
@@ -181,20 +182,22 @@ Appeal letters are saved to `utils/outputs/` with filename format: `{account_id}
 
 Based on Azure OpenAI GPT-4.1 standard pricing ($2.20/1M input, $8.80/1M output):
 
-### Per Appeal Letter (~$0.20)
+### Per Appeal Letter (~$0.27)
 | Step | Input Tokens | Output Tokens | Cost |
 |------|-------------|---------------|------|
 | Denial info extraction | ~4,000 | ~100 | $0.01 |
 | Note extraction (4 calls avg) | ~12,000 | ~3,200 | $0.05 |
-| Appeal letter generation | ~50,000 | ~3,000 | $0.14 |
-| **Total** | ~66,000 | ~6,300 | **~$0.20** |
+| Structured data extraction | ~8,000 | ~1,500 | $0.03 |
+| Appeal letter generation | ~55,000 | ~3,000 | $0.15 |
+| Strength assessment | ~12,000 | ~800 | $0.03 |
+| **Total** | ~91,000 | ~8,600 | **~$0.27** |
 
 ### Monthly Projections
 | Volume | LLM Cost |
 |--------|----------|
-| 100 appeals/month | ~$20 |
-| 500 appeals/month | ~$100 |
-| 1,000 appeals/month | ~$200 |
+| 100 appeals/month | ~$27 |
+| 500 appeals/month | ~$135 |
+| 1,000 appeals/month | ~$270 |
 
 **One-time setup:** <$1 for gold letter + Propel ingestion
 

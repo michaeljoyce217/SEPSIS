@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sepsis Appeal Engine - Technical Architecture</title>
+    <style>
+        :root {
+            --mercy-blue: #003366;
+            --mercy-light: #4a90c2;
+            --accent: #e85a30;
+            --success: #28a745;
+            --light-bg: #f8f9fa;
+            --dark-text: #2c3e50;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--light-bg);
+            color: var(--dark-text);
+            line-height: 1.7;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--mercy-blue), var(--mercy-light));
+            color: white;
+            padding: 2rem 2rem;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 2.2rem;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+
+        header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .subtitle {
+            display: inline-block;
+            background: var(--accent);
+            padding: 0.4rem 1rem;
+            border-radius: 25px;
+            font-size: 0.9rem;
+            margin-top: 1rem;
+        }
+
+        .content {
+            max-width: 950px;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+        }
+
+        .panel {
+            background: white;
+            padding: 2.5rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        }
+
+        h2 {
+            color: var(--mercy-blue);
+            margin-bottom: 1.5rem;
+            font-size: 1.8rem;
+            border-bottom: 3px solid var(--accent);
+            padding-bottom: 0.5rem;
+        }
+
+        h3 {
+            color: var(--mercy-light);
+            margin: 2rem 0 1rem;
+            font-size: 1.3rem;
+        }
+
+        p {
+            margin-bottom: 1rem;
+            font-size: 1.05rem;
+        }
+
+        .callout {
+            background: #e8f4fd;
+            border: 1px solid var(--mercy-light);
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .callout.success {
+            background: #e8f5e9;
+            border-color: var(--success);
+        }
+
+        .callout h4 {
+            color: var(--mercy-blue);
+            margin-bottom: 0.5rem;
+            font-size: 1.1rem;
+        }
+
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+            font-size: 1rem;
+        }
+
+        .comparison-table th {
+            background: var(--mercy-blue);
+            color: white;
+            padding: 1rem;
+            text-align: left;
+        }
+
+        .comparison-table td {
+            padding: 1rem;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .comparison-table tr:nth-child(even) {
+            background: var(--light-bg);
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .pipeline-visual {
+            background: var(--dark-text);
+            color: white;
+            padding: 2rem;
+            border-radius: 12px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.8rem;
+            overflow-x: auto;
+            white-space: pre;
+            line-height: 1.4;
+            margin: 1.5rem 0;
+        }
+
+        .benefit-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        .benefit-card {
+            background: var(--light-bg);
+            padding: 1.5rem;
+            border-radius: 10px;
+            text-align: center;
+            border-top: 4px solid var(--accent);
+        }
+
+        .benefit-card .icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .benefit-card h4 {
+            color: var(--mercy-blue);
+            margin-bottom: 0.5rem;
+        }
+
+        .benefit-card p {
+            font-size: 0.95rem;
+            color: #666;
+            margin: 0;
+        }
+
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 1.8rem;
+            }
+            .pipeline-visual {
+                font-size: 0.65rem;
+            }
+        }
+
+        @media print {
+            body {
+                background: white;
+            }
+            .panel {
+                box-shadow: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Sepsis Appeal Engine</h1>
+        <p>Technical Architecture</p>
+        <span class="subtitle">Multi-Agent AI System | Financial Data Science</span>
+    </header>
+
+    <main class="content">
+        <section class="panel">
+            <h2>Technical Architecture</h2>
+            <p>
+                The Sepsis Appeal Engine is Mercy's first <strong>multi-agent AI system</strong> - an orchestrated
+                pipeline of specialized AI agents that collaborate to transform a denial PDF into a complete appeal letter.
+                Each denial is processed end-to-end in a single run - no batch processing, no intermediate tables.
+            </p>
+
+            <h3>Single-Letter Processing Flow</h3>
+            <div class="pipeline-visual">
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                         SINGLE-LETTER PROCESSING (inference.py)                          │
+│                                                                                          │
+│   [Denial PDF]                                                                           │
+│        │                                                                                 │
+│        ▼                                                                                 │
+│   ┌─────────────────────┐                                                                │
+│   │  DOCUMENT INTEL     │  Azure AI Document Intelligence                                │
+│   │  AGENT              │  • OCR extraction from PDF                                     │
+│   │                     │  • Page-by-page text output                                    │
+│   └─────────┬───────────┘                                                                │
+│             │                                                                            │
+│             │ Full denial text                                                           │
+│             ▼                                                                            │
+│   ┌─────────────────────┐                                                                │
+│   │  EXTRACTION AGENT   │  GPT-4.1 LLM                                                   │
+│   │                     │  • Extract: hsp_account_id from denial text                    │
+│   │  "Metadata          │                                                                │
+│   │   Extraction"       │  (POC only - workqueue provides this directly in production)  │
+│   └─────────┬───────────┘                                                                │
+│             │                                                                            │
+│             │ account_id                                                                 │
+│             ▼                                                                            │
+│   ┌─────────────────────┐                                                                │
+│   │  PARSER AGENT       │  GPT-4.1 LLM                                                   │
+│   │                     │  • Extract: payor name                                         │
+│   │  "Structured Data   │  • Extract: original_drg, proposed_drg (only if explicit)     │
+│   │   Extraction"       │  • Classify: is_sepsis (true/false)                            │
+│   └─────────┬───────────┘                                                                │
+│             │                                                                            │
+│             │ payor, DRGs, is_sepsis                                                     │
+│             ▼                                                                            │
+│   ┌─────────────────────┐    ┌─────────────────────────────────────────────────┐         │
+│   │  EMBEDDING +        │◄───│  Gold Letter Library (Unity Catalog)             │         │
+│   │  RETRIEVAL AGENT    │    │                                                  │         │
+│   │                     │    │  Each gold letter contains:                      │         │
+│   │  text-embedding-    │    │  • Original DENIAL text (with embedding)         │         │
+│   │  ada-002            │    │  • Winning APPEAL text (used as template)        │         │
+│   │                     │    │                                                  │         │
+│   │  Process:           │    │  Logic: Find the past denial most similar to    │         │
+│   │  1. Embed new denial│    │  this new denial, then use its winning appeal   │         │
+│   │     text (1536 dims)│    │  as a template - proven arguments get reused    │         │
+│   │  2. Compare vs all  │    │                                                  │         │
+│   │     gold denial     │    │  Threshold: 0.7 cosine similarity               │         │
+│   │     embeddings      │    │  • Score >= 0.7: Use matched appeal template    │         │
+│   │  3. Return best     │    │  • Score < 0.7: Use default template instead    │         │
+│   │     match           │    │                                                  │         │
+│   └─────────┬───────────┘    └─────────────────────────────────────────────────┘         │
+│             │                                                                            │
+│             │ Best Match: gold letter appeal text (or default template)                  │
+│             ▼                                                                            │
+│   ┌─────────────────────┐    ┌───────────────────────────────────────────────────┐       │
+│   │  CLARITY QUERY      │◄───│            EPIC CLARITY DATABASE                   │       │
+│   │                     │    │                                                    │       │
+│   │  "Clinical Context" │    │   14 CLINICAL NOTE TYPES RETRIEVED:                │       │
+│   │                     │    │   Progress Notes  │  Consults       │ H&P          │       │
+│   │  Queries for this   │    │   Discharge Summ  │  ED Notes       │ Initial Assess│      │
+│   │  single account     │    │   ED Triage       │  ED Provider    │ Addendum      │      │
+│   │                     │    │   Hospital Course │  Subj/Objective │ Assess & Plan │      │
+│   │                     │    │   Nursing Notes   │  Code Docs      │              │       │
+│   │                     │    │                                                    │       │
+│   │                     │    │   Notes < 8,000 chars: pass through unchanged      │       │
+│   │                     │    │   Notes > 8,000 chars: LLM extracts key clinical   │       │
+│   │                     │    │     data (SOFA components, vitals, labs, infection │       │
+│   │                     │    │     evidence, timestamps) to support appeal        │       │
+│   └─────────┬───────────┘    └───────────────────────────────────────────────────┘       │
+│             │                                                                            │
+│             │ Clinical notes (short pass through, long ones LLM-extracted)               │
+│             ▼                                                                            │
+│   ┌─────────────────────┐    ┌─────────────────────┐                                     │
+│   ┌─────────────────────┐    ┌─────────────────────┐                                     │
+│   │  STRUCTURED DATA    │◄───│  Clarity Structured │                                     │
+│   │  EXTRACTION         │    │  Tables             │                                     │
+│   │                     │    │  (fudgesicle_       │                                     │
+│   │  GPT-4.1 LLM        │    │   labs/vitals/meds/ │                                     │
+│   │                     │    │   procedures/icd10) │                                     │
+│   │  Extracts sepsis-   │    └─────────────────────┘                                     │
+│   │  relevant data from │                                                                │
+│   │  chronological      │                                                                │
+│   │  timeline           │                                                                │
+│   └─────────┬───────────┘                                                                │
+│             │                                                                            │
+│             │ Extracted structured data (SOFA components, bundle compliance, trends)     │
+│             ▼                                                                            │
+│   ┌─────────────────────┐    ┌─────────────────────┐                                     │
+│   │  WRITER AGENT       │◄───│  Propel Criteria    │                                     │
+│   │                     │    │  (from Unity        │                                     │
+│   │  GPT-4.1 LLM        │    │   Catalog)          │                                     │
+│   │  "Appeal Generation"│    └─────────────────────┘                                     │
+│   │                     │                                                                │
+│   │  CONTEXT INCLUDES:  │                                                                │
+│   │  • Denial letter    │                                                                │
+│   │  • Gold appeal      │                                                                │
+│   │  • Propel criteria  │                                                                │
+│   │  • 14 clinical notes│                                                                │
+│   │  • Structured data  │                                                                │
+│   │  • Patient info     │                                                                │
+│   └─────────┬───────────┘                                                                │
+│             │                                                                            │
+│             │ Generated appeal letter                                                    │
+│             ▼                                                                            │
+│   ┌─────────────────────┐                                                                │
+│   │  ASSESSMENT AGENT   │  GPT-4.1 LLM                                                   │
+│   │                     │  • Evaluates letter against Propel criteria                    │
+│   │  "Strength          │  • Scores argument structure vs denial/gold                    │
+│   │   Assessment"       │  • Flags missing evidence from notes/structured data           │
+│   │                     │  • Returns: score (1-10), rating, detailed breakdown           │
+│   └─────────┬───────────┘                                                                │
+│             │                                                                            │
+│             ▼                                                                            │
+│   ┌─────────────────────┐                                                                │
+│   │  DOCX EXPORT        │  Formatted Word document                                       │
+│   │                     │  • Assessment section before letter body                       │
+│   │  "Human Review      │  • Saved to utils/outputs/                                     │
+│   │   Ready"            │  • Filename: {account_id}_{patient}_appeal.docx                │
+│   └─────────────────────┘                                                                │
+│                                                                                          │
+│   *In production, account_id comes from Epic workqueue instead of LLM extraction         │
+│                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────┘</div>
+
+            <h3>Agent Summary</h3>
+            <table class="comparison-table">
+                <tr>
+                    <th>Agent</th>
+                    <th>Technology</th>
+                    <th>Function</th>
+                    <th>Output</th>
+                </tr>
+                <tr>
+                    <td><strong>Document Intel</strong></td>
+                    <td>Azure AI Document Intelligence</td>
+                    <td>OCR extraction from PDF pages</td>
+                    <td>Raw text per page</td>
+                </tr>
+                <tr>
+                    <td><strong>Extraction*</strong></td>
+                    <td>GPT-4.1</td>
+                    <td>Extract hsp_account_id from denial text</td>
+                    <td>account_id for Clarity query</td>
+                </tr>
+                <tr>
+                    <td><strong>Parser</strong></td>
+                    <td>GPT-4.1</td>
+                    <td>Extract structured fields from denial text</td>
+                    <td>payor, DRGs, is_sepsis</td>
+                </tr>
+                <tr>
+                    <td><strong>Embedding</strong></td>
+                    <td>text-embedding-ada-002</td>
+                    <td>Generate semantic vector</td>
+                    <td>1536-dim denial fingerprint</td>
+                </tr>
+                <tr>
+                    <td><strong>Retrieval</strong></td>
+                    <td>Cosine Similarity</td>
+                    <td>Find most similar past denial</td>
+                    <td>Best-match gold letter</td>
+                </tr>
+                <tr>
+                    <td><strong>Writer</strong></td>
+                    <td>GPT-4.1</td>
+                    <td>Generate complete appeal letter</td>
+                    <td>Persuasive appeal text</td>
+                </tr>
+                <tr>
+                    <td><strong>Structured Data Extractor</strong></td>
+                    <td>GPT-4.1</td>
+                    <td>Extract sepsis data from labs/vitals/meds timeline</td>
+                    <td>SOFA components, bundle compliance</td>
+                </tr>
+                <tr>
+                    <td><strong>Assessment</strong></td>
+                    <td>GPT-4.1</td>
+                    <td>Evaluate letter strength against criteria</td>
+                    <td>Score, rating, detailed breakdown</td>
+                </tr>
+            </table>
+            <p style="font-size: 0.85rem; color: #666; margin-top: -0.5rem;">
+                <em>*POC only: Extraction Agent extracts account_id from denial text. In production, workqueue provides this directly - Extraction Agent becomes unnecessary.</em>
+            </p>
+
+            <h3>Why Multi-Agent Architecture?</h3>
+            <div class="benefit-grid">
+                <div class="benefit-card">
+                    <div class="icon">&#9881;</div>
+                    <h4>Specialization</h4>
+                    <p>Each agent is optimized for one task - better prompts, better results</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="icon">&#9889;</div>
+                    <h4>Parallelization</h4>
+                    <p>Long note extractions run concurrently on Databricks - faster processing</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="icon">&#128270;</div>
+                    <h4>Observability</h4>
+                    <p>Each agent's output is logged - easy debugging and quality monitoring</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="icon">&#128736;</div>
+                    <h4>Maintainability</h4>
+                    <p>Update one agent without affecting others - isolated improvements</p>
+                </div>
+            </div>
+
+            <h3>LLM Call Summary</h3>
+            <div class="callout">
+                <h4>Per Case: 5-19 LLM Calls (POC) / 4-18 (Production)</h4>
+                <p>
+                    <strong>POC Minimum (5 calls):</strong> Parser + Extraction (account_id) + Structured Data + Writer + Assessment<br>
+                    <strong>POC Maximum (19 calls):</strong> Parser + Extraction + Structured Data + Writer + Assessment + 14 Note extractions<br>
+                    <strong>Production:</strong> 4-18 calls (workqueue provides account_id, no Extraction Agent needed)<br>
+                    <strong>Typical:</strong> ~7-10 calls per case (parser, extraction*, structured data, writer, assessment, 3-6 note extractions)
+                </p>
+            </div>
+
+            <h3>Cost Breakdown (Azure OpenAI GPT-4.1)</h3>
+            <table class="comparison-table">
+                <tr>
+                    <th>Step</th>
+                    <th>Input Tokens</th>
+                    <th>Output Tokens</th>
+                    <th>Cost</th>
+                </tr>
+                <tr>
+                    <td>Denial info extraction</td>
+                    <td>~4,000</td>
+                    <td>~100</td>
+                    <td>$0.01</td>
+                </tr>
+                <tr>
+                    <td>Note extraction (4 calls avg)</td>
+                    <td>~12,000</td>
+                    <td>~3,200</td>
+                    <td>$0.05</td>
+                </tr>
+                <tr>
+                    <td>Structured data extraction</td>
+                    <td>~8,000</td>
+                    <td>~1,500</td>
+                    <td>$0.03</td>
+                </tr>
+                <tr>
+                    <td>Appeal letter generation</td>
+                    <td>~55,000</td>
+                    <td>~3,000</td>
+                    <td>$0.15</td>
+                </tr>
+                <tr>
+                    <td>Strength assessment</td>
+                    <td>~12,000</td>
+                    <td>~800</td>
+                    <td>$0.03</td>
+                </tr>
+                <tr>
+                    <td><strong>Total per letter</strong></td>
+                    <td>~91,000</td>
+                    <td>~8,600</td>
+                    <td><strong>~$0.27</strong></td>
+                </tr>
+            </table>
+            <p style="font-size: 0.9rem; color: #666; margin-top: 0.5rem;">
+                <em>Based on Azure OpenAI GPT-4.1 standard pricing: $2.20/1M input, $8.80/1M output</em>
+            </p>
+
+            <h3>Data Flow (Per Letter)</h3>
+            <table class="comparison-table">
+                <tr>
+                    <th>Step</th>
+                    <th>Input</th>
+                    <th>Processing</th>
+                    <th>Output</th>
+                </tr>
+                <tr>
+                    <td>1. Parse PDF</td>
+                    <td>Denial PDF file</td>
+                    <td>Document Intelligence OCR</td>
+                    <td>Page-by-page text</td>
+                </tr>
+                <tr>
+                    <td>2. Extract ID*</td>
+                    <td>Raw denial text</td>
+                    <td>GPT-4.1 metadata extraction</td>
+                    <td>account_id</td>
+                </tr>
+                <tr>
+                    <td>3. Parse Denial</td>
+                    <td>Raw denial text</td>
+                    <td>GPT-4.1 structured extraction</td>
+                    <td>payor, DRGs, is_sepsis</td>
+                </tr>
+                <tr>
+                    <td>4. Vector Search</td>
+                    <td>Denial text</td>
+                    <td>ada-002 embedding + cosine similarity</td>
+                    <td>Best-match gold letter</td>
+                </tr>
+                <tr>
+                    <td>5. Query Clarity</td>
+                    <td>account_id</td>
+                    <td>Spark SQL query</td>
+                    <td>14 clinical note types</td>
+                </tr>
+                <tr>
+                    <td>6. Extract Notes</td>
+                    <td>Long clinical notes</td>
+                    <td>GPT-4.1 (for notes > 8k chars)</td>
+                    <td>Timestamped evidence</td>
+                </tr>
+                <tr>
+                    <td>6b. Extract Structured</td>
+                    <td>Labs/vitals/meds timeline</td>
+                    <td>GPT-4.1 extraction</td>
+                    <td>SOFA components, bundle compliance</td>
+                </tr>
+                <tr>
+                    <td>7. Generate</td>
+                    <td>All context</td>
+                    <td>GPT-4.1 writer</td>
+                    <td>Appeal letter text</td>
+                </tr>
+                <tr>
+                    <td>7b. Assess</td>
+                    <td>Letter + all evidence</td>
+                    <td>GPT-4.1 assessment</td>
+                    <td>Score, rating, breakdown</td>
+                </tr>
+                <tr>
+                    <td>8. Export</td>
+                    <td>Letter + assessment</td>
+                    <td>python-docx</td>
+                    <td>DOCX for CDI review</td>
+                </tr>
+            </table>
+            <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
+                <em>*POC only: Step 2 extracts account_id from denial text. In production, workqueue provides this directly - step is skipped.</em>
+            </p>
+
+            <div class="callout success">
+                <h4>First Multi-Agent System at Mercy</h4>
+                <p>
+                    This architecture establishes a pattern for future AI initiatives. The same orchestration
+                    approach - specialized agents with clear interfaces - can be applied to other complex
+                    workflows across the organization. Lessons learned here accelerate future projects.
+                </p>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>Sepsis Appeal Engine | Mercy Hospital | Financial Data Science Team</p>
+        <p>Technical Architecture | January 2026</p>
+    </footer>
+</body>
+</html>

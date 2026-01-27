@@ -274,7 +274,7 @@ The assessment never blocks letter generation.
 - Output: ~800 tokens
 - Cost: ~$0.03 per assessment
 
-**Updated per-letter cost:** ~$0.23 (was ~$0.20)
+**Updated per-letter cost:** ~$0.27 (was ~$0.20, includes structured data + assessment)
 
 **Latency:** Adds ~3-5 seconds (not a concern given workflow)
 

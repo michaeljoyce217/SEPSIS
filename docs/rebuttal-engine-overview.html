@@ -672,6 +672,22 @@
                 </p>
             </div>
 
+            <div class="callout success">
+                <h4>Appeal Strength Assessment</h4>
+                <p>
+                    After letter generation, an LLM evaluates the appeal and produces a comprehensive assessment:
+                </p>
+                <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                    <li><strong>Overall Score:</strong> 1-10 with LOW/MODERATE/HIGH rating</li>
+                    <li><strong>Summary:</strong> 2-3 sentences explaining the score</li>
+                    <li><strong>Detailed Breakdown:</strong> Scores three dimensions with specific findings</li>
+                </ul>
+                <p style="margin-top: 0.5rem;">
+                    Each dimension shows what's present (&#10003;), what could strengthen (&#9651;), or what's missing (&#10007;).
+                    Assessment appears in DOCX before the letter body for CDI reviewer reference.
+                </p>
+            </div>
+
             <h3>Human-in-the-Loop Workflow</h3>
             <div class="callout">
                 <h4>AI Assists, Humans Decide</h4>
@@ -714,9 +730,11 @@
 │  Step 2: Vector search for best gold letter (uses denial text only)        │
 │  Step 3: Extract denial info (LLM: account ID, payor, DRGs)                │
 │  Step 4: Query Clarity for this account's clinical notes                   │
-│  Step 5: Extract clinical data from long notes (LLM)                       │
+│  Step 5a: Extract clinical data from long notes (LLM)                      │
+│  Step 5b: Extract sepsis data from structured tables (LLM)                 │
 │  Step 6: Generate appeal letter (LLM)                                      │
-│  Step 7: Export to DOCX                                                    │
+│  Step 6.5: Assess appeal strength (LLM)                                    │
+│  Step 7: Export to DOCX (includes assessment section)                      │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
@@ -737,8 +755,36 @@
                     <td>Official clinical criteria (sepsis definition from Propel)</td>
                 </tr>
             </table>
+
+            <h3>Structured Data Tables (Intermediate)</h3>
+            <table class="comparison-table">
+                <tr>
+                    <th>Table</th>
+                    <th>Contents</th>
+                </tr>
+                <tr>
+                    <td>fudgesicle_labs</td>
+                    <td>Lab results with timestamps (lactate, CBC, BMP, LFTs, cultures)</td>
+                </tr>
+                <tr>
+                    <td>fudgesicle_vitals</td>
+                    <td>Vital signs (temp, HR, RR, BP, MAP, SpO2, GCS, UO)</td>
+                </tr>
+                <tr>
+                    <td>fudgesicle_meds</td>
+                    <td>Medication administrations (antibiotics, vasopressors, fluids)</td>
+                </tr>
+                <tr>
+                    <td>fudgesicle_procedures</td>
+                    <td>Procedures (lines, intubation, dialysis)</td>
+                </tr>
+                <tr>
+                    <td>fudgesicle_icd10</td>
+                    <td>ICD-10 diagnosis codes</td>
+                </tr>
+            </table>
             <p style="font-size: 0.9rem; color: #666;">
-                <em>Note: No intermediate inference tables - single-letter processing queries Clarity directly for each denial.</em>
+                <em>Structured data is merged into a chronological timeline, then LLM extracts sepsis-relevant information.</em>
             </p>
 
             <h3>Technology Stack</h3>
@@ -803,10 +849,27 @@
 │   │  DOCUMENT INTEL     │  Azure AI Document Intelligence                                │
 │   │  AGENT              │  • OCR extraction from PDF                                     │
 │   │                     │  • Page-by-page text output                                    │
-│   │                     │  • Full denial text used for gold letter matching below        │
 │   └─────────┬───────────┘                                                                │
 │             │                                                                            │
 │             │ Full denial text                                                           │
+│             ▼                                                                            │
+│   ┌─────────────────────┐                                                                │
+│   │  EXTRACTION AGENT   │  GPT-4.1 LLM                                                   │
+│   │                     │  • Extract: hsp_account_id from denial text                    │
+│   │  "Metadata          │                                                                │
+│   │   Extraction"       │  (POC only - workqueue provides this directly in production)  │
+│   └─────────┬───────────┘                                                                │
+│             │                                                                            │
+│             │ account_id                                                                 │
+│             ▼                                                                            │
+│   ┌─────────────────────┐                                                                │
+│   │  PARSER AGENT       │  GPT-4.1 LLM                                                   │
+│   │                     │  • Extract: payor name                                         │
+│   │  "Structured Data   │  • Extract: original_drg, proposed_drg (only if explicit)     │
+│   │   Extraction"       │  • Classify: is_sepsis (true/false)                            │
+│   └─────────┬───────────┘                                                                │
+│             │                                                                            │
+│             │ payor, DRGs, is_sepsis                                                     │
 │             ▼                                                                            │
 │   ┌─────────────────────┐    ┌─────────────────────────────────────────────────┐         │
 │   │  EMBEDDING +        │◄───│  Gold Letter Library (Unity Catalog)             │         │
@@ -827,16 +890,6 @@
 │             │                                                                            │
 │             │ Best Match: gold letter appeal text (or default template)                  │
 │             ▼                                                                            │
-│   ┌─────────────────────┐                                                                │
-│   │  PARSER AGENT       │  GPT-4.1 LLM                                                   │
-│   │                     │  • Extract: hsp_account_id*                                    │
-│   │  "Structured Data   │  • Extract: payor name                                         │
-│   │   Extraction"       │  • Extract: original_drg, proposed_drg (only if explicit)     │
-│   │                     │  • Classify: is_sepsis (true/false)                            │
-│   └─────────┬───────────┘                                                                │
-│             │                                                                            │
-│             │ account_id (needed for Clarity query)                                      │
-│             ▼                                                                            │
 │   ┌─────────────────────┐    ┌───────────────────────────────────────────────────┐       │
 │   │  CLARITY QUERY      │◄───│            EPIC CLARITY DATABASE                   │       │
 │   │                     │    │                                                    │       │
@@ -853,15 +906,22 @@
 │   │                     │    │     evidence, timestamps) to support appeal        │       │
 │   └─────────┬───────────┘    └───────────────────────────────────────────────────┘       │
 │             │                                                                            │
+│             │ Clinical notes (short pass through, long ones LLM-extracted)               │
 │             ▼                                                                            │
-│   ┌─────────────────────┐                                                                │
-│   │  EXTRACTION AGENTS  │  GPT-4.1 LLM (for notes > 8,000 chars)                         │
-│   │                     │                                                                │
-│   │  "Clinical Data     │  • Extract relevant clinical findings                          │
-│   │   with Timestamps"  │  • Preserve timestamps for each data point                     │
-│   │                     │  • Output: "03/15 08:00: Lactate 4.2, MAP 63"                  │
+│   ┌─────────────────────┐    ┌─────────────────────┐                                     │
+│   ┌─────────────────────┐    ┌─────────────────────┐                                     │
+│   │  STRUCTURED DATA    │◄───│  Clarity Structured │                                     │
+│   │  EXTRACTION         │    │  Tables             │                                     │
+│   │                     │    │  (fudgesicle_       │                                     │
+│   │  GPT-4.1 LLM        │    │   labs/vitals/meds/ │                                     │
+│   │                     │    │   procedures/icd10) │                                     │
+│   │  Extracts sepsis-   │    └─────────────────────┘                                     │
+│   │  relevant data from │                                                                │
+│   │  chronological      │                                                                │
+│   │  timeline           │                                                                │
 │   └─────────┬───────────┘                                                                │
 │             │                                                                            │
+│             │ Extracted structured data (SOFA components, bundle compliance, trends)     │
 │             ▼                                                                            │
 │   ┌─────────────────────┐    ┌─────────────────────┐                                     │
 │   │  WRITER AGENT       │◄───│  Propel Criteria    │                                     │
@@ -874,15 +934,26 @@
 │   │  • Gold appeal      │                                                                │
 │   │  • Propel criteria  │                                                                │
 │   │  • 14 clinical notes│                                                                │
+│   │  • Structured data  │                                                                │
 │   │  • Patient info     │                                                                │
+│   └─────────┬───────────┘                                                                │
+│             │                                                                            │
+│             │ Generated appeal letter                                                    │
+│             ▼                                                                            │
+│   ┌─────────────────────┐                                                                │
+│   │  ASSESSMENT AGENT   │  GPT-4.1 LLM                                                   │
+│   │                     │  • Evaluates letter against Propel criteria                    │
+│   │  "Strength          │  • Scores argument structure vs denial/gold                    │
+│   │   Assessment"       │  • Flags missing evidence from notes/structured data           │
+│   │                     │  • Returns: score (1-10), rating, detailed breakdown           │
 │   └─────────┬───────────┘                                                                │
 │             │                                                                            │
 │             ▼                                                                            │
 │   ┌─────────────────────┐                                                                │
 │   │  DOCX EXPORT        │  Formatted Word document                                       │
-│   │                     │  • Saved to utils/outputs/                                     │
-│   │  "Human Review      │  • Filename: {account_id}_{patient}_appeal.docx                │
-│   │   Ready"            │  • Ready for CDI specialist review                             │
+│   │                     │  • Assessment section before letter body                       │
+│   │  "Human Review      │  • Saved to utils/outputs/                                     │
+│   │   Ready"            │  • Filename: {account_id}_{patient}_appeal.docx                │
 │   └─────────────────────┘                                                                │
 │                                                                                          │
 │   *In production, account_id comes from Epic workqueue instead of LLM extraction         │
@@ -904,10 +975,16 @@
                     <td>Raw text per page</td>
                 </tr>
                 <tr>
+                    <td><strong>Extraction*</strong></td>
+                    <td>GPT-4.1</td>
+                    <td>Extract hsp_account_id from denial text</td>
+                    <td>account_id for Clarity query</td>
+                </tr>
+                <tr>
                     <td><strong>Parser</strong></td>
                     <td>GPT-4.1</td>
-                    <td>Extract structured fields from denial text*</td>
-                    <td>account_id, payor, DRGs, is_sepsis</td>
+                    <td>Extract structured fields from denial text</td>
+                    <td>payor, DRGs, is_sepsis</td>
                 </tr>
                 <tr>
                     <td><strong>Embedding</strong></td>
@@ -922,20 +999,26 @@
                     <td>Best-match gold letter</td>
                 </tr>
                 <tr>
-                    <td><strong>Extraction (×14)</strong></td>
-                    <td>GPT-4.1 (parallel)</td>
-                    <td>Extract clinical data with timestamps</td>
-                    <td>Focused evidence per note type</td>
-                </tr>
-                <tr>
                     <td><strong>Writer</strong></td>
                     <td>GPT-4.1</td>
                     <td>Generate complete appeal letter</td>
                     <td>Persuasive appeal text</td>
                 </tr>
+                <tr>
+                    <td><strong>Structured Data Extractor</strong></td>
+                    <td>GPT-4.1</td>
+                    <td>Extract sepsis data from labs/vitals/meds timeline</td>
+                    <td>SOFA components, bundle compliance</td>
+                </tr>
+                <tr>
+                    <td><strong>Assessment</strong></td>
+                    <td>GPT-4.1</td>
+                    <td>Evaluate letter strength against criteria</td>
+                    <td>Score, rating, detailed breakdown</td>
+                </tr>
             </table>
             <p style="font-size: 0.85rem; color: #666; margin-top: -0.5rem;">
-                <em>*POC only: account_id is extracted by LLM from denial text. In production, this will come from Epic workqueue integration.</em>
+                <em>*POC only: Extraction Agent extracts account_id from denial text. In production, workqueue provides this directly - Extraction Agent becomes unnecessary.</em>
             </p>
 
             <h3>Why Multi-Agent Architecture?</h3>
@@ -948,7 +1031,7 @@
                 <div class="benefit-card">
                     <div class="icon">&#9889;</div>
                     <h4>Parallelization</h4>
-                    <p>Extraction agents run concurrently on Databricks - faster processing</p>
+                    <p>Long note extractions run concurrently on Databricks - faster processing</p>
                 </div>
                 <div class="benefit-card">
                     <div class="icon">&#128270;</div>
@@ -964,11 +1047,12 @@
 
             <h3>LLM Call Summary</h3>
             <div class="callout">
-                <h4>Per Case: 2-16 LLM Calls</h4>
+                <h4>Per Case: 5-19 LLM Calls (POC) / 4-18 (Production)</h4>
                 <p>
-                    <strong>Minimum (2 calls):</strong> Parser + Writer (when all notes are short)<br>
-                    <strong>Maximum (16 calls):</strong> Parser + Writer + 14 Extraction calls (when all notes exceed 8K chars)<br>
-                    <strong>Typical:</strong> ~5-8 calls per case (parser, writer, 3-6 extractions)
+                    <strong>POC Minimum (5 calls):</strong> Parser + Extraction (account_id) + Structured Data + Writer + Assessment<br>
+                    <strong>POC Maximum (19 calls):</strong> Parser + Extraction + Structured Data + Writer + Assessment + 14 Note extractions<br>
+                    <strong>Production:</strong> 4-18 calls (workqueue provides account_id, no Extraction Agent needed)<br>
+                    <strong>Typical:</strong> ~7-10 calls per case (parser, extraction*, structured data, writer, assessment, 3-6 note extractions)
                 </p>
             </div>
 
@@ -993,16 +1077,28 @@
                     <td>$0.05</td>
                 </tr>
                 <tr>
+                    <td>Structured data extraction</td>
+                    <td>~8,000</td>
+                    <td>~1,500</td>
+                    <td>$0.03</td>
+                </tr>
+                <tr>
                     <td>Appeal letter generation</td>
-                    <td>~50,000</td>
+                    <td>~55,000</td>
                     <td>~3,000</td>
-                    <td>$0.14</td>
+                    <td>$0.15</td>
+                </tr>
+                <tr>
+                    <td>Strength assessment</td>
+                    <td>~12,000</td>
+                    <td>~800</td>
+                    <td>$0.03</td>
                 </tr>
                 <tr>
                     <td><strong>Total per letter</strong></td>
-                    <td>~66,000</td>
-                    <td>~6,300</td>
-                    <td><strong>~$0.20</strong></td>
+                    <td>~91,000</td>
+                    <td>~8,600</td>
+                    <td><strong>~$0.27</strong></td>
                 </tr>
             </table>
             <p style="font-size: 0.9rem; color: #666; margin-top: 0.5rem;">
@@ -1024,42 +1120,63 @@
                     <td>Page-by-page text</td>
                 </tr>
                 <tr>
-                    <td>2. Vector Search</td>
+                    <td>2. Extract ID*</td>
+                    <td>Raw denial text</td>
+                    <td>GPT-4.1 metadata extraction</td>
+                    <td>account_id</td>
+                </tr>
+                <tr>
+                    <td>3. Parse Denial</td>
+                    <td>Raw denial text</td>
+                    <td>GPT-4.1 structured extraction</td>
+                    <td>payor, DRGs, is_sepsis</td>
+                </tr>
+                <tr>
+                    <td>4. Vector Search</td>
                     <td>Denial text</td>
                     <td>ada-002 embedding + cosine similarity</td>
                     <td>Best-match gold letter</td>
                 </tr>
                 <tr>
-                    <td>3. Extract Info</td>
-                    <td>Raw denial text</td>
-                    <td>GPT-4.1 structured extraction</td>
-                    <td>account_id, payor, DRGs, is_sepsis</td>
-                </tr>
-                <tr>
-                    <td>4. Query Clarity</td>
+                    <td>5. Query Clarity</td>
                     <td>account_id</td>
                     <td>Spark SQL query</td>
                     <td>14 clinical note types</td>
                 </tr>
                 <tr>
-                    <td>5. Extract Notes</td>
+                    <td>6. Extract Notes</td>
                     <td>Long clinical notes</td>
                     <td>GPT-4.1 (for notes > 8k chars)</td>
                     <td>Timestamped evidence</td>
                 </tr>
                 <tr>
-                    <td>6. Generate</td>
+                    <td>6b. Extract Structured</td>
+                    <td>Labs/vitals/meds timeline</td>
+                    <td>GPT-4.1 extraction</td>
+                    <td>SOFA components, bundle compliance</td>
+                </tr>
+                <tr>
+                    <td>7. Generate</td>
                     <td>All context</td>
                     <td>GPT-4.1 writer</td>
                     <td>Appeal letter text</td>
                 </tr>
                 <tr>
-                    <td>7. Export</td>
-                    <td>Letter + metadata</td>
+                    <td>7b. Assess</td>
+                    <td>Letter + all evidence</td>
+                    <td>GPT-4.1 assessment</td>
+                    <td>Score, rating, breakdown</td>
+                </tr>
+                <tr>
+                    <td>8. Export</td>
+                    <td>Letter + assessment</td>
                     <td>python-docx</td>
                     <td>DOCX for CDI review</td>
                 </tr>
             </table>
+            <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
+                <em>*POC only: Step 2 extracts account_id from denial text. In production, workqueue provides this directly - step is skipped.</em>
+            </p>
 
             <div class="callout success">
                 <h4>First Multi-Agent System at Mercy</h4>
@@ -1142,13 +1259,13 @@
             <h3>Investment Profile</h3>
             <ul>
                 <li><strong>Infrastructure cost:</strong> $0 incremental (uses existing Databricks/Azure)</li>
-                <li><strong>LLM cost:</strong> ~$0.20 per letter (Azure OpenAI GPT-4.1)</li>
+                <li><strong>LLM cost:</strong> ~$0.27 per letter (Azure OpenAI GPT-4.1)</li>
                 <li><strong>One-time setup:</strong> &lt;$1 (gold letter + Propel ingestion)</li>
                 <li><strong>Monthly cost examples:</strong>
                     <ul>
-                        <li>100 appeals/month: ~$20</li>
-                        <li>500 appeals/month: ~$100</li>
-                        <li>1,000 appeals/month: ~$200</li>
+                        <li>100 appeals/month: ~$27</li>
+                        <li>500 appeals/month: ~$135</li>
+                        <li>1,000 appeals/month: ~$270</li>
                     </ul>
                 </li>
                 <li><strong>Development:</strong> Internal Financial Data Science team</li>

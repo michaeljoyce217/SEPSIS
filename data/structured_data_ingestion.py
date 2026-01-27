@@ -3,7 +3,7 @@
 #
 # STRUCTURED DATA PIPELINE:
 # 1. Query Clarity for labs, vitals, meds, procedures, ICD-10 for a single account
-# 2. Write each to intermediate tables (herald_train_*)
+# 2. Write each to intermediate tables (fudgesicle_*)
 # 3. Merge all into chronological timeline
 # 4. LLM extracts sepsis-relevant data
 #
@@ -29,14 +29,14 @@ else:
 # -----------------------------------------------------------------------------
 # Intermediate Table Names
 # -----------------------------------------------------------------------------
-LABS_TABLE = f"{trgt_cat}.fin_ds.herald_train_labs"
-VITALS_TABLE = f"{trgt_cat}.fin_ds.herald_train_vitals"
-MEDS_TABLE = f"{trgt_cat}.fin_ds.herald_train_meds"
-PROCEDURES_TABLE = f"{trgt_cat}.fin_ds.herald_train_procedures"
-ICD10_TABLE = f"{trgt_cat}.fin_ds.herald_train_icd10"
+LABS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_labs"
+VITALS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_vitals"
+MEDS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_meds"
+PROCEDURES_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_procedures"
+ICD10_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_icd10"
 
 print(f"Catalog: {trgt_cat}")
-print(f"Tables: herald_train_*")
+print(f"Tables: fudgesicle_*")
 
 # =============================================================================
 # CELL 2: Table Schemas (Run once to create tables)
@@ -139,7 +139,7 @@ if CREATE_TABLES:
 def query_labs_for_account(account_id):
     """
     Query Clarity for lab results for a single account.
-    Writes to herald_train_labs table.
+    Writes to fudgesicle_labs table.
 
     TODO: Replace with actual Clarity table/column names
     """
@@ -203,7 +203,7 @@ def query_labs_for_account(account_id):
 def query_vitals_for_account(account_id):
     """
     Query Clarity for vital signs for a single account.
-    Writes to herald_train_vitals table.
+    Writes to fudgesicle_vitals table.
 
     TODO: Replace with actual Clarity table/column names
     """
@@ -257,7 +257,7 @@ def query_vitals_for_account(account_id):
 def query_meds_for_account(account_id):
     """
     Query Clarity for medication administrations for a single account.
-    Writes to herald_train_meds table.
+    Writes to fudgesicle_meds table.
 
     TODO: Replace with actual Clarity table/column names
     """
@@ -314,7 +314,7 @@ def query_meds_for_account(account_id):
 def query_procedures_for_account(account_id):
     """
     Query Clarity for procedures for a single account.
-    Writes to herald_train_procedures table.
+    Writes to fudgesicle_procedures table.
 
     TODO: Replace with actual Clarity table/column names
     """
@@ -366,7 +366,7 @@ def query_procedures_for_account(account_id):
 def query_icd10_for_account(account_id):
     """
     Query Clarity for ICD-10 diagnosis codes for a single account.
-    Writes to herald_train_icd10 table.
+    Writes to fudgesicle_icd10 table.
 
     TODO: Replace with actual Clarity table/column names
     """
@@ -420,7 +420,7 @@ def query_icd10_for_account(account_id):
 def ingest_structured_data_for_account(account_id):
     """
     Run all structured data queries for a single account.
-    Each writes to its respective herald_train_* table.
+    Each writes to its respective fudgesicle_* table.
     """
     print(f"\n{'='*60}")
     print(f"INGESTING STRUCTURED DATA FOR ACCOUNT {account_id}")

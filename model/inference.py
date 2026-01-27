@@ -7,9 +7,12 @@
 # 3. Extract denial info → LLM extracts account ID, payor, DRGs, sepsis flag
 # 4. Query Clarity → Get clinical notes for this account
 # 5. Extract clinical data → LLM extracts from long notes (>8k chars)
-# 6. Generate appeal → Use gold letter as template, clinical notes as evidence
+# 6. Generate appeal → Use gold letter as template, clinical notes + structured data as evidence
 # 6.5. Assess strength → LLM evaluates letter against Propel criteria, argument structure, evidence quality
 # 7. Output → DOCX file with assessment section for CDI review
+#
+# Note: Step 5b (structured data extraction) runs in parallel with Step 5a conceptually,
+# but sequentially in this script. Both feed into Step 6.
 #
 # PRODUCTION-LIKE WORKFLOW:
 # This mirrors how production will work - one denial at a time from Epic workqueue.
@@ -577,7 +580,7 @@ Return ONLY valid JSON in this exact format:
 
 
 def assess_appeal_strength(generated_letter, propel_definition, denial_text,
-                           extracted_notes, gold_letter_text):
+                           extracted_notes, gold_letter_text, structured_data=None):
     """
     Assess the strength of a generated appeal letter.
     Returns assessment dict or None if assessment fails.
@@ -593,8 +596,9 @@ def assess_appeal_strength(generated_letter, propel_definition, denial_text,
             notes_summary.append(f"## {note_type}\n{truncated}")
     extracted_clinical_data = "\n\n".join(notes_summary) if notes_summary else "No clinical notes available"
 
-    # Structured data placeholder
-    structured_data = "Not yet available - structured data integration pending (labs, vitals, medications, procedures, ICD-10 codes)"
+    # Use provided structured data or placeholder
+    if not structured_data or "not yet available" in structured_data.lower() or "failed" in structured_data.lower():
+        structured_data = "Not yet available - structured data integration pending (labs, vitals, medications, procedures, ICD-10 codes)"
 
     try:
         response = openai_client.chat.completions.create(
@@ -840,6 +844,9 @@ WRITER_PROMPT = '''You are a clinical coding expert writing a DRG validation app
 ## Code Documentation
 {code_documentation}
 
+# Structured Clinical Data (Labs, Vitals, Medications, Procedures)
+{structured_data_section}
+
 # Official Clinical Definition
 {clinical_definition_section}
 
@@ -959,10 +966,25 @@ else:
 
         if clinical_data:
             # ---------------------------------------------------------------------
-            # STEP 5: Extract clinical notes
+            # STEP 5a: Extract clinical notes
             # ---------------------------------------------------------------------
-            print("\nStep 5: Processing clinical notes...")
+            print("\nStep 5a: Processing clinical notes...")
             extracted_notes = extract_notes_for_case(clinical_data)
+
+            # ---------------------------------------------------------------------
+            # STEP 5b: Extract structured data (labs, vitals, meds, procedures)
+            # ---------------------------------------------------------------------
+            print("\nStep 5b: Processing structured data...")
+            # Import the structured data function
+            try:
+                from data.structured_data_ingestion import get_structured_data_for_account
+                extracted_structured_data = get_structured_data_for_account(account_id, openai_client)
+            except ImportError:
+                print("  Note: structured_data_ingestion.py not available in this environment")
+                extracted_structured_data = "Structured data not yet available - pending Clarity query integration"
+            except Exception as e:
+                print(f"  Warning: Structured data extraction failed: {e}")
+                extracted_structured_data = f"Structured data extraction failed: {str(e)}"
 
             # ---------------------------------------------------------------------
             # STEP 6: Generate appeal letter
@@ -1005,6 +1027,7 @@ else:
                 assessment_plan=extracted_notes.get("assessment_plan", "Not available"),
                 nursing_note=extracted_notes.get("nursing_note", "Not available"),
                 code_documentation=extracted_notes.get("code_documentation", "Not available"),
+                structured_data_section=extracted_structured_data,
                 clinical_definition_section=clinical_definition_section,
                 gold_letter_section=gold_letter_section,
                 gold_letter_instructions=gold_letter_instructions,
@@ -1049,7 +1072,8 @@ else:
                 propel_definition=propel_def_for_assessment,
                 denial_text=denial_text,
                 extracted_notes=extracted_notes,
-                gold_letter_text=gold_letter_text_for_assessment
+                gold_letter_text=gold_letter_text_for_assessment,
+                structured_data=extracted_structured_data
             )
 
             # ---------------------------------------------------------------------
