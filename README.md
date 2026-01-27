@@ -104,11 +104,13 @@ The system pulls **14 sepsis-relevant note types** for comprehensive clinical ev
 ```
 SEPSIS/
 ├── data/
-│   └── featurization.py      # ONE-TIME: Knowledge base ingestion
+│   ├── featurization.py              # ONE-TIME: Knowledge base ingestion
+│   └── structured_data_ingestion.py  # SEPARATE: Labs/vitals/meds ingestion (future integration)
 ├── model/
 │   └── inference.py          # MAIN: Single-letter processing
 ├── utils/
-│   ├── gold_standard_appeals/  # Past winning appeal letters (PDFs) + default template
+│   ├── gold_standard_appeals_sepsis_only/    # Current gold letters + default template
+│   ├── gold_standard_appeals_sepsis_multiple/ # Future use
 │   ├── sample_denial_letters/  # Denial letters to test with (PDFs)
 │   ├── propel_data/            # Clinical criteria definitions (PDFs)
 │   └── outputs/                # Generated appeal letters (DOCX)
@@ -128,13 +130,25 @@ SEPSIS/
 
 Note: No intermediate inference tables needed - single-letter processing queries Clarity directly.
 
+### Structured Data Tables (Future - via structured_data_ingestion.py)
+
+| Table | Contents |
+|-------|----------|
+| `fudgesicle_labs` | Lab results with timestamps (lactate, CBC, BMP, LFTs, cultures) |
+| `fudgesicle_vitals` | Vital signs (temp, HR, RR, BP, MAP, SpO2, GCS, UO) |
+| `fudgesicle_meds` | Medication administrations (antibiotics, vasopressors, fluids) |
+| `fudgesicle_procedures` | Procedures (lines, intubation, dialysis) |
+| `fudgesicle_icd10` | ICD-10 diagnosis codes |
+
+*Structured data ingestion runs separately via structured_data_ingestion.py. Will be integrated into featurization.py.*
+
 ## Quick Start (Databricks)
 
 ### 1. Initial Setup
 
 Copy files to Databricks notebooks and set the paths:
 ```python
-GOLD_LETTERS_PATH = "/Workspace/Repos/your-user/fudgesicle/utils/gold_standard_appeals"
+GOLD_LETTERS_PATH = "/Workspace/Repos/your-user/fudgesicle/utils/gold_standard_appeals_sepsis_only"
 PROPEL_DATA_PATH = "/Workspace/Repos/your-user/fudgesicle/utils/propel_data"
 ```
 
@@ -209,22 +223,26 @@ Run the notebook. For this denial:
 
 Based on Azure OpenAI GPT-4.1 standard pricing ($2.20/1M input, $8.80/1M output):
 
-### Per Appeal Letter (~$0.20)
+### Per Appeal Letter (~$0.27 with structured data)
 
 | Step | Input Tokens | Output Tokens | Cost |
 |------|-------------|---------------|------|
 | Denial info extraction | ~4,000 | ~100 | $0.01 |
 | Note extraction (4 calls avg) | ~12,000 | ~3,200 | $0.05 |
-| Appeal letter generation | ~50,000 | ~3,000 | $0.14 |
-| **Total** | ~66,000 | ~6,300 | **~$0.20** |
+| Structured data extraction* | ~8,000 | ~1,500 | $0.03 |
+| Appeal letter generation | ~55,000 | ~3,000 | $0.15 |
+| Strength assessment | ~12,000 | ~800 | $0.03 |
+| **Total** | ~91,000 | ~8,600 | **~$0.27** |
+
+*Runs separately via structured_data_ingestion.py. Will be integrated into featurization.py.
 
 ### Monthly Projections
 
 | Volume | LLM Cost |
 |--------|----------|
-| 100 appeals/month | ~$20 |
-| 500 appeals/month | ~$100 |
-| 1,000 appeals/month | ~$200 |
+| 100 appeals/month | ~$27 |
+| 500 appeals/month | ~$135 |
+| 1,000 appeals/month | ~$270 |
 
 **One-time setup (featurization.py):** <$1 for gold letter + Propel ingestion
 
@@ -235,7 +253,7 @@ Based on Azure OpenAI GPT-4.1 standard pricing ($2.20/1M input, $8.80/1M output)
 The architecture supports any denial type. To add a new condition (e.g., pneumonia):
 
 1. **Add clinical criteria**: Place `propel_pneumonia.pdf` in `utils/propel_data/`
-2. **Add gold letters**: Add winning pneumonia appeals to `gold_standard_appeals/`
+2. **Add gold letters**: Add winning appeals to appropriate `gold_standard_appeals_*/` folder
 3. **Update scope filter**: Modify `SCOPE_FILTER` logic in inference.py
 4. **Run ingestion**: Re-run featurization.py with ingestion flags enabled
 

@@ -27,7 +27,8 @@ SEPSIS/
 ├── model/
 │   └── inference.py                  # MAIN: Single-letter end-to-end processing
 ├── utils/
-│   ├── gold_standard_appeals/        # Past winning appeal letters (PDFs) + default template
+│   ├── gold_standard_appeals_sepsis_only/    # Current gold letters + default template
+│   ├── gold_standard_appeals_sepsis_multiple/ # Future use
 │   ├── sample_denial_letters/        # New denial letters to process (PDFs)
 │   ├── propel_data/                  # Clinical criteria definitions (PDFs)
 │   └── outputs/                      # Generated appeal letters (DOCX files)
@@ -75,9 +76,8 @@ Run for each denial letter:
 | 2. Vector Search | Cosine Similarity | Find best-matching gold letter (uses denial text only) |
 | 3. Info Extract | GPT-4.1 | Extract: account_id, payor, DRGs, is_sepsis (conservative - no hallucination) |
 | 4. Clarity Query | Spark SQL (optimized) | Get 14 clinical note types for this account |
-| 5a. Note Extraction | GPT-4.1 | Extract SOFA components + clinical data with timestamps |
-| 5b. Structured Data | GPT-4.1 | Extract sepsis-relevant info from labs, vitals, meds, procedures |
-| 6. Letter Generation | GPT-4.1 | Generate appeal using gold letter + clinical evidence + structured data |
+| 5. Note Extraction | GPT-4.1 | Extract SOFA components + clinical data with timestamps |
+| 6. Letter Generation | GPT-4.1 | Generate appeal using gold letter + clinical evidence |
 | 6.5. Strength Assessment | GPT-4.1 | Evaluate letter against Propel criteria, argument structure, evidence quality |
 | 7. Export | python-docx | Output DOCX with assessment section + markdown bold parsing |
 
@@ -92,7 +92,7 @@ Run for each denial letter:
 | `dev.fin_ds.fudgesicle_gold_letters` | Past winning appeals with denial embeddings |
 | `dev.fin_ds.fudgesicle_propel_data` | Official clinical criteria (definition_summary for prompts) |
 
-### Structured Data (populated by structured_data_ingestion.py)
+### Structured Data (populated by structured_data_ingestion.py - standalone script)
 
 | Table | Purpose |
 |-------|---------|
@@ -101,6 +101,9 @@ Run for each denial letter:
 | `dev.fin_ds.fudgesicle_meds` | Medication administrations |
 | `dev.fin_ds.fudgesicle_procedures` | Procedures performed |
 | `dev.fin_ds.fudgesicle_icd10` | ICD-10 diagnosis codes |
+| `dev.fin_ds.fudgesicle_structured_timeline` | Merged chronological timeline |
+
+Note: Structured data ingestion is currently a standalone script, not yet integrated with inference.py.
 
 ---
 
@@ -182,22 +185,21 @@ Appeal letters are saved to `utils/outputs/` with filename format: `{account_id}
 
 Based on Azure OpenAI GPT-4.1 standard pricing ($2.20/1M input, $8.80/1M output):
 
-### Per Appeal Letter (~$0.27)
+### Per Appeal Letter (~$0.23)
 | Step | Input Tokens | Output Tokens | Cost |
 |------|-------------|---------------|------|
 | Denial info extraction | ~4,000 | ~100 | $0.01 |
 | Note extraction (4 calls avg) | ~12,000 | ~3,200 | $0.05 |
-| Structured data extraction | ~8,000 | ~1,500 | $0.03 |
-| Appeal letter generation | ~55,000 | ~3,000 | $0.15 |
+| Appeal letter generation | ~50,000 | ~3,000 | $0.14 |
 | Strength assessment | ~12,000 | ~800 | $0.03 |
-| **Total** | ~91,000 | ~8,600 | **~$0.27** |
+| **Total** | ~78,000 | ~7,100 | **~$0.23** |
 
 ### Monthly Projections
 | Volume | LLM Cost |
 |--------|----------|
-| 100 appeals/month | ~$27 |
-| 500 appeals/month | ~$135 |
-| 1,000 appeals/month | ~$270 |
+| 100 appeals/month | ~$23 |
+| 500 appeals/month | ~$115 |
+| 1,000 appeals/month | ~$230 |
 
 **One-time setup:** <$1 for gold letter + Propel ingestion
 

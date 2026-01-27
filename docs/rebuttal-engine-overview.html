@@ -730,8 +730,7 @@
 │  Step 2: Vector search for best gold letter (uses denial text only)        │
 │  Step 3: Extract denial info (LLM: account ID, payor, DRGs)                │
 │  Step 4: Query Clarity for this account's clinical notes                   │
-│  Step 5a: Extract clinical data from long notes (LLM)                      │
-│  Step 5b: Extract sepsis data from structured tables (LLM)                 │
+│  Step 5: Extract clinical data from long notes (LLM)                       │
 │  Step 6: Generate appeal letter (LLM)                                      │
 │  Step 6.5: Assess appeal strength (LLM)                                    │
 │  Step 7: Export to DOCX (includes assessment section)                      │
@@ -756,7 +755,7 @@
                 </tr>
             </table>
 
-            <h3>Structured Data Tables (Intermediate)</h3>
+            <h3>Structured Data Tables (Future - via structured_data_ingestion.py)</h3>
             <table class="comparison-table">
                 <tr>
                     <th>Table</th>
@@ -784,7 +783,7 @@
                 </tr>
             </table>
             <p style="font-size: 0.9rem; color: #666;">
-                <em>Structured data is merged into a chronological timeline, then LLM extracts sepsis-relevant information.</em>
+                <em>Note: Structured data ingestion is a standalone script, not yet integrated with inference.py.</em>
             </p>
 
             <h3>Technology Stack</h3>
@@ -909,21 +908,6 @@
 │             │ Clinical notes (short pass through, long ones LLM-extracted)               │
 │             ▼                                                                            │
 │   ┌─────────────────────┐    ┌─────────────────────┐                                     │
-│   ┌─────────────────────┐    ┌─────────────────────┐                                     │
-│   │  STRUCTURED DATA    │◄───│  Clarity Structured │                                     │
-│   │  EXTRACTION         │    │  Tables             │                                     │
-│   │                     │    │  (fudgesicle_       │                                     │
-│   │  GPT-4.1 LLM        │    │   labs/vitals/meds/ │                                     │
-│   │                     │    │   procedures/icd10) │                                     │
-│   │  Extracts sepsis-   │    └─────────────────────┘                                     │
-│   │  relevant data from │                                                                │
-│   │  chronological      │                                                                │
-│   │  timeline           │                                                                │
-│   └─────────┬───────────┘                                                                │
-│             │                                                                            │
-│             │ Extracted structured data (SOFA components, bundle compliance, trends)     │
-│             ▼                                                                            │
-│   ┌─────────────────────┐    ┌─────────────────────┐                                     │
 │   │  WRITER AGENT       │◄───│  Propel Criteria    │                                     │
 │   │                     │    │  (from Unity        │                                     │
 │   │  GPT-4.1 LLM        │    │   Catalog)          │                                     │
@@ -934,7 +918,6 @@
 │   │  • Gold appeal      │                                                                │
 │   │  • Propel criteria  │                                                                │
 │   │  • 14 clinical notes│                                                                │
-│   │  • Structured data  │                                                                │
 │   │  • Patient info     │                                                                │
 │   └─────────┬───────────┘                                                                │
 │             │                                                                            │
@@ -944,7 +927,7 @@
 │   │  ASSESSMENT AGENT   │  GPT-4.1 LLM                                                   │
 │   │                     │  • Evaluates letter against Propel criteria                    │
 │   │  "Strength          │  • Scores argument structure vs denial/gold                    │
-│   │   Assessment"       │  • Flags missing evidence from notes/structured data           │
+│   │   Assessment"       │  • Flags missing evidence from clinical notes                  │
 │   │                     │  • Returns: score (1-10), rating, detailed breakdown           │
 │   └─────────┬───────────┘                                                                │
 │             │                                                                            │
@@ -1005,7 +988,7 @@
                     <td>Persuasive appeal text</td>
                 </tr>
                 <tr>
-                    <td><strong>Structured Data Extractor</strong></td>
+                    <td><strong>Structured Data Extractor**</strong></td>
                     <td>GPT-4.1</td>
                     <td>Extract sepsis data from labs/vitals/meds timeline</td>
                     <td>SOFA components, bundle compliance</td>
@@ -1018,7 +1001,8 @@
                 </tr>
             </table>
             <p style="font-size: 0.85rem; color: #666; margin-top: -0.5rem;">
-                <em>*POC only: Extraction Agent extracts account_id from denial text. In production, workqueue provides this directly - Extraction Agent becomes unnecessary.</em>
+                <em>*POC only: Extraction Agent extracts account_id from denial text. In production, workqueue provides this directly - Extraction Agent becomes unnecessary.</em><br>
+                <em>**Runs separately via structured_data_ingestion.py. Will be integrated into featurization.py.</em>
             </p>
 
             <h3>Why Multi-Agent Architecture?</h3>
@@ -1047,12 +1031,13 @@
 
             <h3>LLM Call Summary</h3>
             <div class="callout">
-                <h4>Per Case: 5-19 LLM Calls (POC) / 4-18 (Production)</h4>
+                <h4>Per Case: 4-18 LLM Calls (POC) / 3-17 (Production)</h4>
                 <p>
-                    <strong>POC Minimum (5 calls):</strong> Parser + Extraction (account_id) + Structured Data + Writer + Assessment<br>
-                    <strong>POC Maximum (19 calls):</strong> Parser + Extraction + Structured Data + Writer + Assessment + 14 Note extractions<br>
-                    <strong>Production:</strong> 4-18 calls (workqueue provides account_id, no Extraction Agent needed)<br>
-                    <strong>Typical:</strong> ~7-10 calls per case (parser, extraction*, structured data, writer, assessment, 3-6 note extractions)
+                    <strong>POC Minimum (4 calls):</strong> Parser + Extraction (account_id) + Writer + Assessment<br>
+                    <strong>POC Maximum (18 calls):</strong> Parser + Extraction + Writer + Assessment + 14 Note extractions<br>
+                    <strong>Production:</strong> 3-17 calls (workqueue provides account_id, no Extraction Agent needed)<br>
+                    <strong>Typical:</strong> ~6-9 calls per case (parser, extraction*, writer, assessment, 3-6 note extractions)<br>
+                    <strong>With Structured Data**:</strong> +1 call per case for labs/vitals/meds extraction
                 </p>
             </div>
 
@@ -1077,7 +1062,7 @@
                     <td>$0.05</td>
                 </tr>
                 <tr>
-                    <td>Structured data extraction</td>
+                    <td>Structured data extraction**</td>
                     <td>~8,000</td>
                     <td>~1,500</td>
                     <td>$0.03</td>
@@ -1102,7 +1087,8 @@
                 </tr>
             </table>
             <p style="font-size: 0.9rem; color: #666; margin-top: 0.5rem;">
-                <em>Based on Azure OpenAI GPT-4.1 standard pricing: $2.20/1M input, $8.80/1M output</em>
+                <em>Based on Azure OpenAI GPT-4.1 standard pricing: $2.20/1M input, $8.80/1M output</em><br>
+                <em>**Runs separately via structured_data_ingestion.py. Will be integrated into featurization.py.</em>
             </p>
 
             <h3>Data Flow (Per Letter)</h3>
@@ -1150,7 +1136,7 @@
                     <td>Timestamped evidence</td>
                 </tr>
                 <tr>
-                    <td>6b. Extract Structured</td>
+                    <td>6b. Extract Structured**</td>
                     <td>Labs/vitals/meds timeline</td>
                     <td>GPT-4.1 extraction</td>
                     <td>SOFA components, bundle compliance</td>
@@ -1162,20 +1148,21 @@
                     <td>Appeal letter text</td>
                 </tr>
                 <tr>
-                    <td>7b. Assess</td>
+                    <td>8. Assess</td>
                     <td>Letter + all evidence</td>
                     <td>GPT-4.1 assessment</td>
                     <td>Score, rating, breakdown</td>
                 </tr>
                 <tr>
-                    <td>8. Export</td>
+                    <td>9. Export</td>
                     <td>Letter + assessment</td>
                     <td>python-docx</td>
                     <td>DOCX for CDI review</td>
                 </tr>
             </table>
             <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
-                <em>*POC only: Step 2 extracts account_id from denial text. In production, workqueue provides this directly - step is skipped.</em>
+                <em>*POC only: Step 2 extracts account_id from denial text. In production, workqueue provides this directly - step is skipped.</em><br>
+                <em>**Runs separately via structured_data_ingestion.py. Will be integrated into featurization.py.</em>
             </p>
 
             <div class="callout success">
@@ -1259,7 +1246,7 @@
             <h3>Investment Profile</h3>
             <ul>
                 <li><strong>Infrastructure cost:</strong> $0 incremental (uses existing Databricks/Azure)</li>
-                <li><strong>LLM cost:</strong> ~$0.27 per letter (Azure OpenAI GPT-4.1)</li>
+                <li><strong>LLM cost:</strong> ~$0.27 per letter (Azure OpenAI GPT-4.1, with structured data)</li>
                 <li><strong>One-time setup:</strong> &lt;$1 (gold letter + Propel ingestion)</li>
                 <li><strong>Monthly cost examples:</strong>
                     <ul>

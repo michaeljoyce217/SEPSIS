@@ -286,12 +286,11 @@
 │             │ Clinical notes (short pass through, long ones LLM-extracted)               │
 │             ▼                                                                            │
 │   ┌─────────────────────┐    ┌─────────────────────┐                                     │
-│   ┌─────────────────────┐    ┌─────────────────────┐                                     │
-│   │  STRUCTURED DATA    │◄───│  Clarity Structured │                                     │
-│   │  EXTRACTION         │    │  Tables             │                                     │
+│   │  STRUCTURED DATA    │◄───│  Clarity Structured │  (Separate script:                  │
+│   │  EXTRACTION**       │    │  Tables             │   structured_data_ingestion.py)     │
 │   │                     │    │  (fudgesicle_       │                                     │
-│   │  GPT-4.1 LLM        │    │   labs/vitals/meds/ │                                     │
-│   │                     │    │   procedures/icd10) │                                     │
+│   │  GPT-4.1 LLM        │    │   labs/vitals/meds/ │  Will be integrated into            │
+│   │                     │    │   procedures/icd10) │  featurization.py                   │
 │   │  Extracts sepsis-   │    └─────────────────────┘                                     │
 │   │  relevant data from │                                                                │
 │   │  chronological      │                                                                │
@@ -311,7 +310,7 @@
 │   │  • Gold appeal      │                                                                │
 │   │  • Propel criteria  │                                                                │
 │   │  • 14 clinical notes│                                                                │
-│   │  • Structured data  │                                                                │
+│   │  • Structured data**│                                                                │
 │   │  • Patient info     │                                                                │
 │   └─────────┬───────────┘                                                                │
 │             │                                                                            │
@@ -382,7 +381,7 @@
                     <td>Persuasive appeal text</td>
                 </tr>
                 <tr>
-                    <td><strong>Structured Data Extractor</strong></td>
+                    <td><strong>Structured Data Extractor**</strong></td>
                     <td>GPT-4.1</td>
                     <td>Extract sepsis data from labs/vitals/meds timeline</td>
                     <td>SOFA components, bundle compliance</td>
@@ -395,7 +394,8 @@
                 </tr>
             </table>
             <p style="font-size: 0.85rem; color: #666; margin-top: -0.5rem;">
-                <em>*POC only: Extraction Agent extracts account_id from denial text. In production, workqueue provides this directly - Extraction Agent becomes unnecessary.</em>
+                <em>*POC only: Extraction Agent extracts account_id from denial text. In production, workqueue provides this directly - Extraction Agent becomes unnecessary.</em><br>
+                <em>**Runs separately via structured_data_ingestion.py. Will be integrated into featurization.py.</em>
             </p>
 
             <h3>Why Multi-Agent Architecture?</h3>
@@ -424,12 +424,13 @@
 
             <h3>LLM Call Summary</h3>
             <div class="callout">
-                <h4>Per Case: 5-19 LLM Calls (POC) / 4-18 (Production)</h4>
+                <h4>Per Case: 4-18 LLM Calls (POC) / 3-17 (Production)</h4>
                 <p>
-                    <strong>POC Minimum (5 calls):</strong> Parser + Extraction (account_id) + Structured Data + Writer + Assessment<br>
-                    <strong>POC Maximum (19 calls):</strong> Parser + Extraction + Structured Data + Writer + Assessment + 14 Note extractions<br>
-                    <strong>Production:</strong> 4-18 calls (workqueue provides account_id, no Extraction Agent needed)<br>
-                    <strong>Typical:</strong> ~7-10 calls per case (parser, extraction*, structured data, writer, assessment, 3-6 note extractions)
+                    <strong>POC Minimum (4 calls):</strong> Parser + Extraction (account_id) + Writer + Assessment<br>
+                    <strong>POC Maximum (18 calls):</strong> Parser + Extraction + Writer + Assessment + 14 Note extractions<br>
+                    <strong>Production:</strong> 3-17 calls (workqueue provides account_id, no Extraction Agent needed)<br>
+                    <strong>Typical:</strong> ~6-9 calls per case (parser, extraction*, writer, assessment, 3-6 note extractions)<br>
+                    <strong>With Structured Data**:</strong> +1 call per case for labs/vitals/meds extraction
                 </p>
             </div>
 
@@ -454,7 +455,7 @@
                     <td>$0.05</td>
                 </tr>
                 <tr>
-                    <td>Structured data extraction</td>
+                    <td>Structured data extraction**</td>
                     <td>~8,000</td>
                     <td>~1,500</td>
                     <td>$0.03</td>
@@ -527,7 +528,7 @@
                     <td>Timestamped evidence</td>
                 </tr>
                 <tr>
-                    <td>6b. Extract Structured</td>
+                    <td>6b. Extract Structured**</td>
                     <td>Labs/vitals/meds timeline</td>
                     <td>GPT-4.1 extraction</td>
                     <td>SOFA components, bundle compliance</td>
@@ -539,20 +540,21 @@
                     <td>Appeal letter text</td>
                 </tr>
                 <tr>
-                    <td>7b. Assess</td>
+                    <td>8. Assess</td>
                     <td>Letter + all evidence</td>
                     <td>GPT-4.1 assessment</td>
                     <td>Score, rating, breakdown</td>
                 </tr>
                 <tr>
-                    <td>8. Export</td>
+                    <td>9. Export</td>
                     <td>Letter + assessment</td>
                     <td>python-docx</td>
                     <td>DOCX for CDI review</td>
                 </tr>
             </table>
             <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
-                <em>*POC only: Step 2 extracts account_id from denial text. In production, workqueue provides this directly - step is skipped.</em>
+                <em>*POC only: Step 2 extracts account_id from denial text. In production, workqueue provides this directly - step is skipped.</em><br>
+                <em>**Runs separately via structured_data_ingestion.py. Will be integrated into featurization.py.</em>
             </p>
 
             <div class="callout success">

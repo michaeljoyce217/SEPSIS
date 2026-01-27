@@ -52,7 +52,7 @@ GOLD_LETTERS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_gold_letters"
 PROPEL_DATA_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_propel_data"
 
 # Paths
-GOLD_LETTERS_PATH = "/Workspace/Repos/mijo8881@mercy.net/fudgesicle/utils/gold_standard_appeals"
+GOLD_LETTERS_PATH = "/Workspace/Repos/mijo8881@mercy.net/fudgesicle/utils/gold_standard_appeals_sepsis_only"
 PROPEL_DATA_PATH = "/Workspace/Repos/mijo8881@mercy.net/fudgesicle/utils/propel_data"
 
 print(f"Catalog: {trgt_cat}")
