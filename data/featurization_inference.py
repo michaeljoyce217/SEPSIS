@@ -599,13 +599,13 @@ def query_diagnoses(account_id):
     UNION ALL
     -- Problem list history (uses HX fields directly)
     SELECT te.HSP_ACCOUNT_ID, te.PAT_ENC_CSN_ID,
-           phx.HX_PROBLEM_DX_ID AS DX_ID,
+           phx.HX_PROBLEM_ID AS DX_ID,
            phx.HX_PROBLEM_DX_NAME AS DX_NAME,
            CAST(phx.HX_DATE_OF_ENTRY AS TIMESTAMP) AS EVENT_TIMESTAMP,
            'PROBLEM_LIST' AS source
     FROM target_encounter te
     JOIN prod.clarity_cur.problem_list_hx_enh phx ON phx.PAT_ID = te.PAT_ID
-    WHERE phx.HX_PROBLEM_DX_ID IS NOT NULL AND phx.HX_STATUS = 'Active'
+    WHERE phx.HX_PROBLEM_ID IS NOT NULL AND phx.HX_STATUS = 'Active'
     """)
 
     spark.sql(f"""
