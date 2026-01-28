@@ -195,26 +195,41 @@ print("Clients initialized")
 # CELL 6: Core Parser Functions
 # =============================================================================
 
-def extract_text_from_pdf(file_path):
+def extract_text_from_pdf(file_path, max_retries=3):
     """
     Extract text from PDF using Document Intelligence layout model.
     Returns list of strings, one per page.
     """
+    import time
+    import traceback
+
     with open(file_path, 'rb') as f:
         document_bytes = f.read()
 
-    poller = doc_intel_client.begin_analyze_document(
-        model_id="prebuilt-layout",
-        body=AnalyzeDocumentRequest(bytes_source=document_bytes),
-    )
-    result = poller.result()
+    for attempt in range(max_retries):
+        try:
+            poller = doc_intel_client.begin_analyze_document(
+                model_id="prebuilt-layout",
+                body=AnalyzeDocumentRequest(bytes_source=document_bytes),
+            )
+            result = poller.result()
 
-    pages_text = []
-    for page in result.pages:
-        page_lines = [line.content for line in page.lines]
-        pages_text.append("\n".join(page_lines))
+            pages_text = []
+            for page in result.pages:
+                page_lines = [line.content for line in page.lines]
+                pages_text.append("\n".join(page_lines))
 
-    return pages_text
+            return pages_text
+
+        except Exception as e:
+            print(f"    Attempt {attempt + 1}/{max_retries} failed: {type(e).__name__}: {e}")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff: 1, 2, 4 seconds
+                print(f"    Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                print(f"    Full traceback: {traceback.format_exc()}")
+                raise
 
 
 def identify_denial_start(pages_text):
@@ -445,7 +460,9 @@ if RUN_GOLD_INGESTION:
             print(f"  Record created: {record['letter_id']}")
 
         except Exception as e:
-            print(f"  ERROR: {e}")
+            import traceback
+            print(f"  ERROR: {type(e).__name__}: {e}")
+            print(f"  Traceback: {traceback.format_exc()}")
             continue
 
     print(f"\nProcessed {len(gold_records)} gold standard letters")
