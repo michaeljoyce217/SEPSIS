@@ -3,13 +3,14 @@
 #
 # PER-CASE FEATURIZATION: Prepares all data needed for a single appeal:
 # 1. Parse denial PDF → Extract text, account ID, payor, DRGs
-# 2. Query clinical notes → 14 note types from Epic Clarity
+# 2. Query clinical notes → ALL notes from 14 types from Epic Clarity
 # 3. Extract clinical notes → LLM summarization of long notes
 # 4. Query structured data → Labs, vitals, meds, procedures, diagnoses
 # 5. Extract structured data → LLM summarization for sepsis evidence
 # 6. Conflict detection → Flag discrepancies between notes and structured data
+# 7. Write to case tables → Ready for inference.py to read
 #
-# OUTPUT: Prepared data tables ready for inference.py
+# OUTPUT: Case tables in Unity Catalog for inference.py
 #
 # Run on Databricks Runtime 15.4 LTS ML
 
@@ -18,8 +19,10 @@
 # =============================================================================
 import os
 import re
+import json
 from datetime import datetime
 from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType, FloatType, BooleanType
 
 spark = SparkSession.builder.getOrCreate()
 
@@ -40,13 +43,18 @@ EMBEDDING_MODEL = "text-embedding-ada-002"
 # -----------------------------------------------------------------------------
 # Environment Setup
 # -----------------------------------------------------------------------------
+# NOTE: Data lives in prod catalog, but we write to our environment's catalog.
+# This is intentional - we query from prod but can only write to our own env.
 trgt_cat = os.environ.get('trgt_cat', 'dev')
 spark.sql('USE CATALOG prod;')
 
-# Table names for prepared data
-CLINICAL_SUMMARY_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_clinical_summary"
-STRUCTURED_SUMMARY_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_structured_summary"
-CONFLICTS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_conflicts"
+# -----------------------------------------------------------------------------
+# Output Tables (case data for inference.py to read)
+# -----------------------------------------------------------------------------
+CASE_DENIAL_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_case_denial"
+CASE_CLINICAL_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_case_clinical"
+CASE_STRUCTURED_SUMMARY_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_case_structured_summary"
+CASE_CONFLICTS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_case_conflicts"
 
 # Structured data tables (intermediate)
 LABS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_labs"
@@ -112,8 +120,10 @@ def extract_text_from_pdf(file_path):
 
 def generate_embedding(text):
     """Generate embedding vector for text."""
-    if len(text) > 20000:
-        text = text[:20000]
+    # text-embedding-ada-002 has 8191 token limit (~32k chars). Use 30k for safety buffer.
+    if len(text) > 30000:
+        print(f"  Warning: Text truncated from {len(text)} to 30000 chars for embedding")
+        text = text[:30000]
 
     response = openai_client.embeddings.create(
         model=EMBEDDING_MODEL,
@@ -255,7 +265,8 @@ NOTE_TYPE_MAP = {
 def query_clarity_for_account(account_id):
     """
     Query Clarity for clinical notes for a single account.
-    Returns dict with patient info and 14 clinical note types.
+    Returns dict with patient info and ALL notes for each of 14 clinical note types.
+    Notes are concatenated chronologically with timestamps.
     """
     print(f"  Querying Clarity for account {account_id}...")
 
@@ -280,7 +291,7 @@ def query_clarity_for_account(account_id):
     clinical_data = patient_rows[0].asDict()
     print(f"  Found patient: {clinical_data.get('formatted_name', 'Unknown')}")
 
-    # Query 2: Get all notes for this account
+    # Query 2: Get ALL notes for this account (all encounters associated with this HSP_ACCOUNT_ID)
     notes_query = f"""
     SELECT
         nte.ip_note_type,
@@ -299,28 +310,46 @@ def query_clarity_for_account(account_id):
         'Assessment & Plan Note', 'Nursing Note', 'Code Documentation'
       )
     GROUP BY nte.ip_note_type, nte.note_id, nte.note_csn_id, nte.contact_date, nte.ent_inst_local_dttm
+    ORDER BY nte.contact_date ASC, nte.ent_inst_local_dttm ASC
     """
 
     print(f"  Fetching clinical notes...")
     notes_rows = spark.sql(notes_query).collect()
-    print(f"  Retrieved {len(notes_rows)} notes")
+    print(f"  Retrieved {len(notes_rows)} total notes")
 
-    # Pivot: get most recent note per type
+    # Group ALL notes by type (not just most recent)
     notes_by_type = {}
     for row in notes_rows:
         note_type = row['ip_note_type']
-        sort_key = (row['contact_date'], row['ent_inst_local_dttm'])
+        if note_type not in notes_by_type:
+            notes_by_type[note_type] = []
+        notes_by_type[note_type].append(row)
 
-        if note_type not in notes_by_type or sort_key > notes_by_type[note_type][0]:
-            notes_by_type[note_type] = (sort_key, row)
+    # Report counts per type
+    for note_type, notes in notes_by_type.items():
+        print(f"    {note_type}: {len(notes)} notes")
 
-    # Map notes to expected column names
+    # Concatenate all notes of each type with timestamps
     for note_type, (id_col, csn_col, text_col) in NOTE_TYPE_MAP.items():
         if note_type in notes_by_type:
-            _, row = notes_by_type[note_type]
-            clinical_data[id_col] = str(row['note_id']) if row['note_id'] else 'no id available'
-            clinical_data[csn_col] = str(row['note_csn_id']) if row['note_csn_id'] else 'no id available'
-            clinical_data[text_col] = row['note_text'] if row['note_text'] else 'No Note Available'
+            notes_list = notes_by_type[note_type]
+            # Concatenate all notes with timestamps
+            combined_text_parts = []
+            note_ids = []
+            csn_ids = []
+            for row in notes_list:
+                timestamp = row['ent_inst_local_dttm'] or row['contact_date'] or 'Unknown time'
+                note_text = row['note_text'] if row['note_text'] else ''
+                if note_text:
+                    combined_text_parts.append(f"[{timestamp}]\n{note_text}")
+                if row['note_id']:
+                    note_ids.append(str(row['note_id']))
+                if row['note_csn_id']:
+                    csn_ids.append(str(row['note_csn_id']))
+
+            clinical_data[id_col] = ', '.join(note_ids) if note_ids else 'no id available'
+            clinical_data[csn_col] = ', '.join(csn_ids) if csn_ids else 'no id available'
+            clinical_data[text_col] = '\n\n---\n\n'.join(combined_text_parts) if combined_text_parts else 'No Note Available'
         else:
             clinical_data[id_col] = 'no id available'
             clinical_data[csn_col] = 'no id available'
@@ -385,7 +414,7 @@ def extract_clinical_data(note_text, note_type):
                 {"role": "system", "content": "You are a clinical data extraction specialist. Extract relevant medical information with precise timestamps."},
                 {"role": "user", "content": NOTE_EXTRACTION_PROMPT.format(note_type=note_type, note_text=note_text)}
             ],
-            temperature=0.1,
+            temperature=0,
             max_tokens=3000
         )
 
@@ -539,7 +568,10 @@ def query_meds(account_id):
 
 
 def query_diagnoses(account_id):
-    """Query diagnosis records for account (DX_NAME is the granular clinical description)."""
+    """
+    Query diagnosis records for account (DX_NAME is the granular clinical description).
+    All diagnoses include their timestamp - LLM decides relevance based on date.
+    """
     spark.sql(f"""
     CREATE OR REPLACE TEMP VIEW encounter_diagnoses AS
     -- Outpatient encounter diagnoses
@@ -547,12 +579,6 @@ def query_diagnoses(account_id):
            dd.DX_ID,
            edg.DX_NAME,
            CAST(pe.CONTACT_DATE AS TIMESTAMP) AS EVENT_TIMESTAMP,
-           CASE
-               WHEN pe.CONTACT_DATE < te.ENCOUNTER_START THEN 'BEFORE'
-               WHEN pe.CONTACT_DATE >= te.ENCOUNTER_START
-                    AND (te.ENCOUNTER_END IS NULL OR pe.CONTACT_DATE <= te.ENCOUNTER_END) THEN 'DURING'
-               ELSE 'AFTER'
-           END AS TIMING_CATEGORY,
            'OUTPATIENT_ENC_DX' AS source
     FROM target_encounter te
     JOIN prod.clarity_cur.pat_enc_dx_enh dd ON dd.PAT_ENC_CSN_ID = te.PAT_ENC_CSN_ID
@@ -565,12 +591,6 @@ def query_diagnoses(account_id):
            dx.DX_ID,
            edg.DX_NAME,
            CAST(ha.DISCH_DATE_TIME AS TIMESTAMP) AS EVENT_TIMESTAMP,
-           CASE
-               WHEN ha.DISCH_DATE_TIME < te.ENCOUNTER_START THEN 'BEFORE'
-               WHEN ha.DISCH_DATE_TIME >= te.ENCOUNTER_START
-                    AND (te.ENCOUNTER_END IS NULL OR ha.DISCH_DATE_TIME <= te.ENCOUNTER_END) THEN 'DURING'
-               ELSE 'AFTER'
-           END AS TIMING_CATEGORY,
            'INPATIENT_ACCT_DX' AS source
     FROM target_encounter te
     JOIN prod.clarity_cur.hsp_acct_dx_list_enh dx ON dx.PAT_ID = te.PAT_ID
@@ -583,12 +603,6 @@ def query_diagnoses(account_id):
            phx.HX_PROBLEM_DX_ID AS DX_ID,
            phx.HX_PROBLEM_DX_NAME AS DX_NAME,
            CAST(phx.HX_DATE_OF_ENTRY AS TIMESTAMP) AS EVENT_TIMESTAMP,
-           CASE
-               WHEN phx.HX_DATE_OF_ENTRY < te.ENCOUNTER_START THEN 'BEFORE'
-               WHEN phx.HX_DATE_OF_ENTRY >= te.ENCOUNTER_START
-                    AND (te.ENCOUNTER_END IS NULL OR phx.HX_DATE_OF_ENTRY <= te.ENCOUNTER_END) THEN 'DURING'
-               ELSE 'AFTER'
-           END AS TIMING_CATEGORY,
            'PROBLEM_LIST' AS source
     FROM target_encounter te
     JOIN prod.clarity_cur.problem_list_hx_enh phx ON phx.PAT_ID = te.PAT_ID
@@ -597,11 +611,11 @@ def query_diagnoses(account_id):
 
     spark.sql(f"""
     CREATE OR REPLACE TABLE {DIAGNOSIS_TABLE} AS
-    SELECT HSP_ACCOUNT_ID, PAT_ENC_CSN_ID, DX_ID, DX_NAME,
-           TIMING_CATEGORY, EVENT_TIMESTAMP, source
+    SELECT DISTINCT HSP_ACCOUNT_ID, PAT_ENC_CSN_ID, DX_ID, DX_NAME,
+           EVENT_TIMESTAMP, source
     FROM encounter_diagnoses
-    WHERE TIMING_CATEGORY != 'AFTER'
-    ORDER BY TIMING_CATEGORY DESC, EVENT_TIMESTAMP ASC
+    WHERE DX_NAME IS NOT NULL
+    ORDER BY EVENT_TIMESTAMP ASC
     """)
     count = spark.sql(f"SELECT COUNT(*) as cnt FROM {DIAGNOSIS_TABLE}").collect()[0]["cnt"]
     print(f"  Diagnoses: {count} rows")
@@ -633,7 +647,7 @@ def create_merged_timeline(account_id):
                COALESCE(DX_NAME, 'Unknown diagnosis') AS event_detail,
                0 AS is_abnormal
         FROM {DIAGNOSIS_TABLE}
-        WHERE TIMING_CATEGORY = 'DURING' AND EVENT_TIMESTAMP IS NOT NULL
+        WHERE EVENT_TIMESTAMP IS NOT NULL
     ),
     Deduplicated AS (
         SELECT *, ROW_NUMBER() OVER (
@@ -665,6 +679,8 @@ The diagnosis names are the granular clinical descriptions from Epic's diagnosis
 
 Multiple diagnosis records may describe the same condition at different levels of specificity. Use the most specific documented diagnosis that is supported by clinical evidence.
 
+Diagnoses include timestamps - use these to understand if a condition is pre-existing (before admission) or documented during the encounter.
+
 **Your Task:**
 Extract a focused summary of sepsis-relevant clinical data from this timeline. Prioritize:
 
@@ -688,7 +704,7 @@ Extract a focused summary of sepsis-relevant clinical data from this timeline. P
    - Worst values and when they occurred
    - Evidence of organ dysfunction
 
-4. **Pre-existing Conditions** relevant to sepsis risk or severity
+4. **Relevant Diagnoses** (with dates - note which are pre-existing vs new)
 
 **Structured Timeline:**
 {structured_timeline}
@@ -720,19 +736,6 @@ def extract_structured_data_summary(account_id):
         for row in timeline_rows
     ])
 
-    # Get pre-existing conditions
-    pre_existing = spark.sql(f"""
-        SELECT DX_ID, DX_NAME
-        FROM {DIAGNOSIS_TABLE}
-        WHERE TIMING_CATEGORY = 'BEFORE'
-    """).collect()
-
-    if pre_existing:
-        timeline_text = "PRE-EXISTING CONDITIONS:\n" + "\n".join([
-            f"- {row['DX_NAME']}"
-            for row in pre_existing
-        ]) + "\n\nTIMELINE:\n" + timeline_text
-
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4.1",
@@ -740,7 +743,7 @@ def extract_structured_data_summary(account_id):
                 {"role": "system", "content": "You are a clinical data analyst specializing in sepsis cases."},
                 {"role": "user", "content": STRUCTURED_DATA_EXTRACTION_PROMPT.format(structured_timeline=timeline_text)}
             ],
-            temperature=0.1,
+            temperature=0,
             max_tokens=2000
         )
         summary = response.choices[0].message.content.strip()
@@ -846,7 +849,128 @@ def detect_conflicts(notes_summary, structured_summary):
 print("Conflict detection functions loaded")
 
 # =============================================================================
-# CELL 9: Main Processing Pipeline
+# CELL 9: Write to Case Tables
+# =============================================================================
+
+def write_case_denial_table(account_id, denial_text, denial_embedding, denial_info):
+    """Write denial data to case table."""
+    spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {CASE_DENIAL_TABLE} (
+        account_id STRING,
+        denial_text STRING,
+        denial_embedding ARRAY<FLOAT>,
+        payor STRING,
+        original_drg STRING,
+        proposed_drg STRING,
+        is_sepsis BOOLEAN,
+        created_at TIMESTAMP
+    ) USING DELTA
+    """)
+
+    record = [{
+        "account_id": account_id,
+        "denial_text": denial_text,
+        "denial_embedding": denial_embedding,
+        "payor": denial_info.get("payor", "Unknown"),
+        "original_drg": denial_info.get("original_drg"),
+        "proposed_drg": denial_info.get("proposed_drg"),
+        "is_sepsis": denial_info.get("is_sepsis", False),
+        "created_at": datetime.now()
+    }]
+
+    schema = StructType([
+        StructField("account_id", StringType(), False),
+        StructField("denial_text", StringType(), True),
+        StructField("denial_embedding", ArrayType(FloatType()), True),
+        StructField("payor", StringType(), True),
+        StructField("original_drg", StringType(), True),
+        StructField("proposed_drg", StringType(), True),
+        StructField("is_sepsis", BooleanType(), True),
+        StructField("created_at", StringType(), True)
+    ])
+
+    df = spark.createDataFrame(record, schema)
+    df.write.format("delta").mode("overwrite").saveAsTable(CASE_DENIAL_TABLE)
+    print(f"  Written to {CASE_DENIAL_TABLE}")
+
+
+def write_case_clinical_table(account_id, clinical_data, extracted_notes):
+    """Write clinical notes data to case table."""
+    spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {CASE_CLINICAL_TABLE} (
+        account_id STRING,
+        patient_name STRING,
+        patient_dob STRING,
+        facility_name STRING,
+        date_of_service STRING,
+        extracted_notes STRING,
+        created_at TIMESTAMP
+    ) USING DELTA
+    """)
+
+    record = [{
+        "account_id": account_id,
+        "patient_name": clinical_data.get("formatted_name", "Unknown"),
+        "patient_dob": clinical_data.get("formatted_birthdate", ""),
+        "facility_name": clinical_data.get("facility_name", "Mercy Hospital"),
+        "date_of_service": clinical_data.get("formatted_date_of_service", ""),
+        "extracted_notes": json.dumps(extracted_notes),
+        "created_at": datetime.now()
+    }]
+
+    df = spark.createDataFrame(record)
+    df.write.format("delta").mode("overwrite").saveAsTable(CASE_CLINICAL_TABLE)
+    print(f"  Written to {CASE_CLINICAL_TABLE}")
+
+
+def write_case_structured_summary_table(account_id, structured_summary):
+    """Write structured data summary to case table."""
+    spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {CASE_STRUCTURED_SUMMARY_TABLE} (
+        account_id STRING,
+        structured_summary STRING,
+        created_at TIMESTAMP
+    ) USING DELTA
+    """)
+
+    record = [{
+        "account_id": account_id,
+        "structured_summary": structured_summary,
+        "created_at": datetime.now()
+    }]
+
+    df = spark.createDataFrame(record)
+    df.write.format("delta").mode("overwrite").saveAsTable(CASE_STRUCTURED_SUMMARY_TABLE)
+    print(f"  Written to {CASE_STRUCTURED_SUMMARY_TABLE}")
+
+
+def write_case_conflicts_table(account_id, conflicts_result):
+    """Write conflicts data to case table."""
+    spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {CASE_CONFLICTS_TABLE} (
+        account_id STRING,
+        conflicts STRING,
+        recommendation STRING,
+        created_at TIMESTAMP
+    ) USING DELTA
+    """)
+
+    record = [{
+        "account_id": account_id,
+        "conflicts": json.dumps(conflicts_result.get("conflicts", [])),
+        "recommendation": conflicts_result.get("recommendation", ""),
+        "created_at": datetime.now()
+    }]
+
+    df = spark.createDataFrame(record)
+    df.write.format("delta").mode("overwrite").saveAsTable(CASE_CONFLICTS_TABLE)
+    print(f"  Written to {CASE_CONFLICTS_TABLE}")
+
+
+print("Case table write functions loaded")
+
+# =============================================================================
+# CELL 10: Main Processing Pipeline
 # =============================================================================
 print("\n" + "="*60)
 print("FEATURIZATION - PER-CASE DATA PREPARATION")
@@ -929,26 +1053,17 @@ else:
             conflicts_result = detect_conflicts(notes_summary, structured_summary)
 
             # -------------------------------------------------------------------------
-            # STEP 8: Save prepared data
+            # STEP 8: Write to case tables
             # -------------------------------------------------------------------------
-            print("\nStep 8: Saving prepared data...")
+            print("\nStep 8: Writing to case tables...")
+            write_case_denial_table(account_id, denial_text, denial_embedding, denial_info)
+            write_case_clinical_table(account_id, clinical_data, extracted_notes)
+            write_case_structured_summary_table(account_id, structured_summary)
+            write_case_conflicts_table(account_id, conflicts_result)
 
-            # Save to prepared data object (could also write to tables)
-            prepared_data = {
-                "account_id": account_id,
-                "denial_text": denial_text,
-                "denial_embedding": denial_embedding,
-                "denial_info": denial_info,
-                "clinical_data": clinical_data,
-                "extracted_notes": extracted_notes,
-                "structured_summary": structured_summary,
-                "conflicts": conflicts_result,
-                "prepared_at": datetime.now().isoformat()
-            }
-
-            # Store in Spark for inference.py to read
-            # For now, just print summary - inference.py will call these functions directly
-
+            # -------------------------------------------------------------------------
+            # SUMMARY
+            # -------------------------------------------------------------------------
             print("\n" + "="*60)
             print("FEATURIZATION COMPLETE")
             print("="*60)
@@ -961,6 +1076,7 @@ else:
                 print("\nConflicts found:")
                 for conflict in conflicts_result['conflicts']:
                     print(f"  - {conflict}")
+            print(f"\nCase tables written - ready for inference.py")
 
         else:
             print("\nERROR: Could not retrieve clinical data from Clarity.")

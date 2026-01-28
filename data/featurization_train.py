@@ -25,6 +25,7 @@
 # CELL 2: Imports and Configuration
 # =============================================================================
 import os
+import re
 import uuid
 from datetime import datetime
 from pyspark.sql import SparkSession
@@ -223,8 +224,6 @@ def identify_denial_start(pages_text):
 
     Returns (denial_start_page, payor_name) - 1-indexed page number.
     """
-    import re
-
     # Insurance company names
     payor_patterns = [
         ("unitedhealth", "UnitedHealthcare"),
@@ -321,8 +320,10 @@ def generate_embedding(text):
     Generate embedding vector for text using Azure OpenAI.
     Returns 1536-dimensional vector.
     """
-    if len(text) > 20000:
-        text = text[:20000]
+    # text-embedding-ada-002 has 8191 token limit (~32k chars). Use 30k for safety buffer.
+    if len(text) > 30000:
+        print(f"  Warning: Text truncated from {len(text)} to 30000 chars for embedding")
+        text = text[:30000]
 
     response = openai_client.embeddings.create(
         model=EMBEDDING_MODEL,

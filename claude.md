@@ -44,6 +44,12 @@ SEPSIS/
 
 ---
 
+## Environment Note
+
+**Catalog Access Pattern:** Data lives in the `prod` catalog, but we can only write to our current environment's catalog (`dev` or `prod`). This is intentional - all code uses `USE CATALOG prod;` for queries but writes tables with the `trgt_cat` prefix (e.g., `dev.fin_ds.fudgesicle_*`).
+
+---
+
 ## Pipeline Architecture
 
 ### One-Time Setup: featurization_train.py
@@ -56,27 +62,27 @@ Run once to populate knowledge base tables:
 | Propel Extraction | GPT-4.1 | Extract key clinical criteria from Propel PDFs |
 
 ### Per-Case Data Prep: featurization_inference.py
-All data gathering for a single case:
+All data gathering for a single case. **Writes to case tables for inference.py to read.**
 
 | Step | Technology | Function |
 |------|------------|----------|
 | 1. Parse Denial PDF | Azure AI Document Intelligence | OCR extraction from denial PDF |
 | 2. Extract Denial Info | GPT-4.1 | Extract: account_id, payor, DRGs, is_sepsis |
-| 3. Query Clinical Notes | Spark SQL | Get 14 note types from Epic Clarity |
+| 3. Query Clinical Notes | Spark SQL | Get ALL notes from 14 types from Epic Clarity |
 | 4. Extract Clinical Notes | GPT-4.1 | Extract SOFA components + clinical data with timestamps |
-| 5. Query Structured Data | Spark SQL | Get labs, vitals, meds from Clarity |
-| 6. Query Diagnoses | Spark SQL | Get DX records (DX_ID, DX_NAME) from CLARITY_EDG |
-| 7. Extract Structured Summary | GPT-4.1 | Summarize sepsis-relevant data with diagnosis descriptions |
-| 8. Detect Conflicts | GPT-4.1 | Compare notes vs structured data for discrepancies |
+| 5. Query Structured Data | Spark SQL | Get labs, vitals, meds, diagnoses from Clarity |
+| 6. Extract Structured Summary | GPT-4.1 | Summarize sepsis-relevant data with diagnosis descriptions |
+| 7. Detect Conflicts | GPT-4.1 | Compare notes vs structured data for discrepancies |
+| 8. Write Case Tables | Spark SQL | Write all outputs to case tables |
 
 ### Generation: inference.py
-Run for each denial letter (imports functions from featurization_inference.py):
+Reads prepared data from case tables (run featurization_inference.py first):
 
 | Step | Technology | Function |
 |------|------------|----------|
-| 1. Data Prep | featurization_inference.py | Run steps 1-8 above |
-| 2. Vector Search | Cosine Similarity | Find best-matching gold letter (uses denial text only) |
-| 3. Letter Generation | GPT-4.1 | Generate appeal using gold letter + notes + structured data + diagnoses |
+| 1. Load Case Data | Spark SQL | Read from case tables written by featurization_inference.py |
+| 2. Vector Search | Cosine Similarity | Find best-matching gold letter (uses denial embedding) |
+| 3. Letter Generation | GPT-4.1 | Generate appeal using gold letter + notes + structured data |
 | 4. Strength Assessment | GPT-4.1 | Evaluate letter against Propel criteria, argument structure, evidence quality |
 | 5. Export | python-docx | Output DOCX with assessment + conflicts appendix |
 
@@ -88,10 +94,29 @@ Run for each denial letter (imports functions from featurization_inference.py):
 
 | Table | Purpose |
 |-------|---------|
-| `dev.fin_ds.fudgesicle_gold_letters` | Past winning appeals with denial embeddings |
-| `dev.fin_ds.fudgesicle_propel_data` | Official clinical criteria (definition_summary for prompts) |
+| `fudgesicle_gold_letters` | Past winning appeals with denial embeddings |
+| `fudgesicle_propel_data` | Official clinical criteria (definition_summary for prompts) |
 
-Note: Structured data is queried directly from Clarity at inference time - no intermediate tables needed.
+### Case Data (populated by featurization_inference.py, read by inference.py)
+
+| Table | Purpose |
+|-------|---------|
+| `fudgesicle_case_denial` | Denial text, embedding, payor, DRGs, is_sepsis flag |
+| `fudgesicle_case_clinical` | Patient info + extracted clinical notes (JSON) |
+| `fudgesicle_case_structured_summary` | LLM summary of structured data |
+| `fudgesicle_case_conflicts` | Detected conflicts + recommendation |
+
+### Intermediate Data (populated by featurization_inference.py)
+
+| Table | Purpose |
+|-------|---------|
+| `fudgesicle_labs` | Lab results with timestamps |
+| `fudgesicle_vitals` | Vital signs with timestamps |
+| `fudgesicle_meds` | Medication administrations |
+| `fudgesicle_diagnoses` | DX records with timestamps |
+| `fudgesicle_structured_timeline` | Merged chronological timeline |
+
+Note: All tables use the `{trgt_cat}.fin_ds.` prefix (e.g., `dev.fin_ds.fudgesicle_*`).
 
 ---
 
@@ -104,6 +129,8 @@ Note: Structured data is queried directly from Clarity at inference time - no in
 
 ### 14 Clinical Note Types (from Epic Clarity)
 Progress Notes, Consults, H&P, Discharge Summary, ED Notes, Initial Assessments, ED Triage Notes, ED Provider Notes, Addendum Note, Hospital Course, Subjective & Objective, Assessment & Plan Note, Nursing Note, Code Documentation
+
+**Note:** ALL notes from the encounter are retrieved (not just most recent), concatenated chronologically with timestamps.
 
 ### SOFA Score Extraction
 Note extraction prioritizes organ dysfunction data for quantifying sepsis severity:
@@ -125,6 +152,7 @@ Labs, vitals, and medications are queried from Clarity and summarized by LLM for
 We query DX records directly from Epic's CLARITY_EDG table - these are more granular than ICD-10 codes:
 - **DX_NAME** is the specific clinical description (e.g., "Severe sepsis with septic shock due to MRSA")
 - **DX_ID** provides traceability to the source record
+- All diagnoses include timestamps - LLM decides relevance based on date
 - ICD-10 codes are NOT used - DX_NAME is what we quote in appeals
 
 ### Smart Note Extraction
@@ -159,10 +187,10 @@ DOCX export converts markdown bold (`**text**`) to actual Word bold formatting f
 Full Propel PDFs are processed at ingestion time - LLM extracts key clinical criteria into `definition_summary` field for efficient prompt inclusion.
 
 ### Default Template Fallback
-When vector search doesn't find a good match (score < 0.7), the system falls back to `default_sepsis_appeal_template.docx` as a structural guide.
+When vector search doesn't find a good match (score < 0.7), the system falls back to `default_sepsis_appeal_template.docx` as a structural guide. Score displays as "N/A" in output.
 
 ### Single-Letter Processing
-Each denial is processed end-to-end in one run - no batch processing, no intermediate tables. This:
+Each denial is processed end-to-end in one run - no batch processing. This:
 - Eliminates driver memory issues
 - Matches production workflow (Epic workqueue feeds one case at a time)
 - Simplifies debugging and testing
@@ -180,22 +208,18 @@ Appeal letters are saved to `utils/outputs/` with filename format: `{account_id}
 | `RUN_GOLD_INGESTION` | False | Process gold standard letter PDFs |
 | `RUN_PROPEL_INGESTION` | False | Process Propel definition PDFs |
 
-### inference.py Settings
+### featurization_inference.py Settings
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `DENIAL_PDF_PATH` | (required) | Path to denial letter PDF to process |
 | `KNOWN_ACCOUNT_ID` | None | Account ID (if known from Epic workqueue) |
-| `SCOPE_FILTER` | "sepsis" | Which denial types to process |
-| `MATCH_SCORE_THRESHOLD` | 0.7 | Minimum similarity for gold letter match |
 | `NOTE_EXTRACTION_THRESHOLD` | 8000 | Char limit before LLM extraction |
-| `EXPORT_TO_DOCX` | True | Export as Word documents |
 
-### featurization_inference.py (called by inference.py)
+### inference.py Settings
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `NOTE_EXTRACTION_THRESHOLD` | 8000 | Char limit before LLM extraction |
-| `RUN_STRUCTURED_DATA` | True | Query and extract structured data |
-| `RUN_CONFLICT_DETECTION` | True | Compare notes vs structured data |
+| `MATCH_SCORE_THRESHOLD` | 0.7 | Minimum similarity for gold letter match |
+| `EXPORT_TO_DOCX` | True | Export as Word documents |
 
 ---
 
@@ -247,13 +271,18 @@ Based on Azure OpenAI GPT-4.1 standard pricing ($2.20/1M input, $8.80/1M output)
    RUN_PROPEL_INGESTION = True # First run
    ```
 
-3. **Process a denial** - In `inference.py`, set the PDF path:
+3. **Prepare case data** - In `featurization_inference.py`, set the PDF path:
    ```python
    DENIAL_PDF_PATH = "/path/to/denial.pdf"
    ```
-   This will automatically run `featurization_inference.py` to gather all case data.
+   Run the notebook to prepare all case data (writes to case tables).
 
-4. **Review output** in `utils/outputs/` - includes assessment section and conflicts appendix (if any)
+4. **Generate appeal** - Run `inference.py`:
+   - Reads prepared case data from tables
+   - Generates appeal letter
+   - Outputs DOCX to `utils/outputs/`
+
+5. **Review output** - includes assessment section and conflicts appendix (if any)
 
 ---
 
@@ -263,7 +292,7 @@ Based on Azure OpenAI GPT-4.1 standard pricing ($2.20/1M input, $8.80/1M output)
 |-----------|------------|
 | Platform | Databricks on Azure |
 | LLM | Azure OpenAI GPT-4.1 |
-| Embeddings | text-embedding-ada-002 (1536 dims) |
+| Embeddings | text-embedding-ada-002 (1536 dims, 30k char limit) |
 | Document OCR | Azure AI Document Intelligence |
 | Storage | Delta Lake tables in Unity Catalog |
 | Clinical Data | Epic Clarity |
