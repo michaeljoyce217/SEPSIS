@@ -5,7 +5,7 @@
 # 1. Parse denial PDF → Extract text, account ID, payor, DRGs
 # 2. Query clinical notes → ALL notes from 14 types from Epic Clarity
 # 3. Extract clinical notes → LLM summarization of long notes
-# 4. Query structured data → Labs, vitals, meds, procedures, diagnoses
+# 4. Query structured data → Labs, vitals, meds, diagnoses
 # 5. Extract structured data → LLM summarization for sepsis evidence
 # 6. Conflict detection → Flag discrepancies between notes and structured data
 # 7. Write to case tables → Ready for inference.py to read
@@ -22,7 +22,7 @@ import re
 import json
 from datetime import datetime
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, ArrayType, FloatType, BooleanType
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType, FloatType, BooleanType, TimestampType
 
 spark = SparkSession.builder.getOrCreate()
 
@@ -60,7 +60,6 @@ CASE_CONFLICTS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_case_conflicts"
 LABS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_labs"
 VITALS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_vitals"
 MEDS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_meds"
-PROCEDURES_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_procedures"
 DIAGNOSIS_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_diagnoses"
 MERGED_TABLE = f"{trgt_cat}.fin_ds.fudgesicle_structured_timeline"
 
@@ -886,7 +885,7 @@ def write_case_denial_table(account_id, denial_text, denial_embedding, denial_in
         StructField("original_drg", StringType(), True),
         StructField("proposed_drg", StringType(), True),
         StructField("is_sepsis", BooleanType(), True),
-        StructField("created_at", StringType(), True)
+        StructField("created_at", TimestampType(), True)
     ])
 
     df = spark.createDataFrame(record, schema)

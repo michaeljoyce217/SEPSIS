@@ -633,7 +633,7 @@ Return ONLY valid JSON in this format:
     if EXPORT_TO_DOCX:
         print("\nStep 4: Exporting to DOCX...")
         from docx import Document
-        from docx.shared import Pt, RGBColor
+        from docx.shared import Pt
 
         def add_markdown_paragraph(doc, text):
             """Add paragraph with markdown bold converted to Word bold."""
