@@ -10,6 +10,7 @@
             --mercy-light: #4a90c2;
             --accent: #e85a30;
             --success: #28a745;
+            --warning: #ffc107;
             --light-bg: #f8f9fa;
             --dark-text: #2c3e50;
         }
@@ -132,6 +133,19 @@
             margin-bottom: 0.5rem;
         }
 
+        .warning-box {
+            background: #fff8e1;
+            border-left: 4px solid var(--warning);
+            padding: 1rem 1.5rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .warning-box h4 {
+            color: #f57c00;
+            margin-bottom: 0.5rem;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -185,6 +199,38 @@
         .step-content p {
             margin: 0;
             color: #555;
+        }
+
+        .hierarchy-visual {
+            background: linear-gradient(to bottom, #e3f2fd, #fff8e1);
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+
+        .hierarchy-level {
+            padding: 1rem;
+            margin: 0.5rem 0;
+            border-radius: 6px;
+        }
+
+        .hierarchy-primary {
+            background: var(--mercy-blue);
+            color: white;
+        }
+
+        .hierarchy-supporting {
+            background: var(--mercy-light);
+            color: white;
+            margin-left: 2rem;
+        }
+
+        .conflict-example {
+            background: #ffebee;
+            border: 1px solid #ef9a9a;
+            padding: 1rem;
+            border-radius: 6px;
+            margin: 0.5rem 0;
         }
 
         footer {
@@ -242,6 +288,107 @@
     </section>
 
     <section>
+        <h2>Evidence Hierarchy: Notes vs Structured Data</h2>
+        <p>
+            The system uses a deliberate hierarchy when building appeal arguments. Understanding this hierarchy
+            is critical for reviewing the generated letters.
+        </p>
+
+        <div class="hierarchy-visual">
+            <div class="hierarchy-level hierarchy-primary">
+                <strong>PRIMARY EVIDENCE: Physician Notes</strong>
+                <p style="margin-top: 0.5rem; opacity: 0.9;">
+                    Clinical documentation represents the physician's medical judgment and interpretation of the patient's condition.
+                    This is the foundation of the appeal because it captures the clinical reasoning that justifies the diagnosis.
+                </p>
+            </div>
+            <div class="hierarchy-level hierarchy-supporting">
+                <strong>SUPPORTING EVIDENCE: Structured Data</strong>
+                <p style="margin-top: 0.5rem; opacity: 0.9;">
+                    Labs, vitals, and medication records provide objective measurements that corroborate what the physician documented.
+                    These support the clinical narrative but don't replace clinical judgment.
+                </p>
+            </div>
+        </div>
+
+        <h3>Why This Order Matters</h3>
+        <table>
+            <tr>
+                <th>Evidence Type</th>
+                <th>What It Provides</th>
+                <th>Example</th>
+            </tr>
+            <tr>
+                <td><strong>Physician Notes</strong><br><small>(Primary)</small></td>
+                <td>Clinical interpretation and medical judgment - the "why" behind the diagnosis</td>
+                <td>"Patient developed septic shock requiring vasopressor support to maintain adequate perfusion"</td>
+            </tr>
+            <tr>
+                <td><strong>Structured Data</strong><br><small>(Supporting)</small></td>
+                <td>Objective measurements that back up the clinical interpretation</td>
+                <td>MAP 58 mmHg at 14:00, Lactate 4.2 mmol/L, Norepinephrine started 14:30</td>
+            </tr>
+            <tr>
+                <td><strong>Documented Diagnoses</strong><br><small>(Supporting)</small></td>
+                <td>Formal diagnosis descriptions from Epic to quote directly</td>
+                <td>"Severe sepsis with septic shock due to E. coli urinary tract infection"</td>
+            </tr>
+        </table>
+
+        <p>
+            <strong>The appeal letter cites physician notes first</strong>, then uses structured data to
+            provide the specific values and timestamps that support those clinical statements.
+        </p>
+    </section>
+
+    <section>
+        <h2>Conflicts Appendix: When Data Doesn't Match</h2>
+        <p>
+            The system automatically compares what the physician notes say against what the structured data shows.
+            When there's a discrepancy, it flags this for your review.
+        </p>
+
+        <div class="warning-box">
+            <h4>What Is a Conflict?</h4>
+            <p>
+                A conflict occurs when the physician documentation states something that the objective data doesn't support.
+                These require CDI review before the letter is sent.
+            </p>
+        </div>
+
+        <h3>Examples of Conflicts</h3>
+
+        <div class="conflict-example">
+            <strong>CONFLICT:</strong> Note says "MAP maintained >65" but vitals show MAP values of 58, 61, 54 recorded during the same timeframe
+        </div>
+
+        <div class="conflict-example">
+            <strong>CONFLICT:</strong> Note says "lactate normalized" but labs show lactate still elevated at 3.8 mmol/L at time of documentation
+        </div>
+
+        <div class="conflict-example">
+            <strong>CONFLICT:</strong> Note says "no vasopressors needed" but medication records show norepinephrine administration
+        </div>
+
+        <h3>What to Do When You See Conflicts</h3>
+        <div class="highlight">
+            <h4>CDI Reviewer Action Required</h4>
+            <ul>
+                <li><strong>Review the specific times</strong> - Data from different times is not necessarily a conflict</li>
+                <li><strong>Check for documentation timing</strong> - The note may have been written before/after the data in question</li>
+                <li><strong>Verify the clinical context</strong> - There may be a valid explanation for the apparent discrepancy</li>
+                <li><strong>Consider whether to proceed</strong> - If the conflict weakens the appeal, the letter may need revision</li>
+                <li><strong>Query if needed</strong> - Some conflicts may warrant a physician query for clarification</li>
+            </ul>
+        </div>
+
+        <p>
+            The conflicts appendix appears <strong>before</strong> the letter body in the Word document, so you see these
+            flags immediately when you open the file.
+        </p>
+    </section>
+
+    <section>
         <h2>What Goes In</h2>
 
         <div class="input-box">
@@ -255,25 +402,27 @@
         </div>
 
         <div class="input-box">
-            <h4>3. Clinical Notes from Epic</h4>
-            <p>The system pulls 14 types of clinical notes for this patient:</p>
+            <h4>3. Clinical Notes from Epic (PRIMARY)</h4>
+            <p>The system pulls ALL notes from the encounter across 14 types:</p>
             <ul>
                 <li>Progress Notes, H&P, Discharge Summary</li>
                 <li>ED Notes, ED Triage, ED Provider Notes</li>
-                <li>Consults, Nursing Notes</li>
+                <li>Consults, Nursing Notes, Code Documentation</li>
                 <li>And more...</li>
             </ul>
+            <p><strong>These form the primary evidence for the appeal.</strong></p>
         </div>
 
         <div class="input-box">
-            <h4>4. Structured Data from Epic</h4>
-            <p>Objective clinical measurements:</p>
+            <h4>4. Structured Data from Epic (SUPPORTING)</h4>
+            <p>Objective clinical measurements that support the physician documentation:</p>
             <ul>
                 <li><strong>Labs:</strong> Lactate, WBC, procalcitonin, cultures, creatinine, bilirubin, platelets</li>
                 <li><strong>Vitals:</strong> Temperature, MAP, heart rate, respiratory rate, SpO2, GCS</li>
-                <li><strong>Medications:</strong> Antibiotics, vasopressors, fluids</li>
+                <li><strong>Medications:</strong> Antibiotics, vasopressors, fluids with administration times</li>
                 <li><strong>Diagnoses:</strong> Documented diagnosis descriptions (e.g., "Severe sepsis with septic shock due to MRSA")</li>
             </ul>
+            <p><strong>This data is cross-checked against notes to detect conflicts.</strong></p>
         </div>
 
         <div class="input-box">
@@ -286,12 +435,12 @@
         <h2>What Comes Out</h2>
 
         <div class="output-box">
-            <h4>A Word Document with:</h4>
-            <ul>
+            <h4>A Word Document with Three Parts:</h4>
+            <ol>
                 <li><strong>Strength Assessment</strong> - A score (1-10) rating how strong the appeal is, with notes on what evidence is present vs. missing</li>
-                <li><strong>The Appeal Letter</strong> - A complete draft addressing the denial arguments with clinical evidence</li>
-                <li><strong>Conflicts Flag</strong> - If the physician notes say one thing but the labs/vitals show something different, this is flagged for your review</li>
-            </ul>
+                <li><strong>Conflicts Appendix</strong> (if any) - Flags where physician notes don't match structured data, requiring your review before sending</li>
+                <li><strong>The Appeal Letter</strong> - A complete draft addressing the denial arguments with clinical evidence, citing notes first, then supporting data</li>
+            </ol>
         </div>
     </section>
 
@@ -318,7 +467,7 @@
             <div class="step-number">3</div>
             <div class="step-content">
                 <h4>Gather Clinical Evidence</h4>
-                <p>Pulls all relevant notes, labs, vitals, meds, and diagnoses from Epic for this patient.</p>
+                <p>Pulls ALL notes from the encounter plus labs, vitals, meds, and diagnoses from Epic.</p>
             </div>
         </div>
 
@@ -326,7 +475,7 @@
             <div class="step-number">4</div>
             <div class="step-content">
                 <h4>Check for Conflicts</h4>
-                <p>Compares what the physician notes say vs. what the structured data shows. Flags any discrepancies for your review.</p>
+                <p>Compares what the physician notes say vs. what the structured data shows. Flags any discrepancies for your review in the conflicts appendix.</p>
             </div>
         </div>
 
@@ -334,7 +483,7 @@
             <div class="step-number">5</div>
             <div class="step-content">
                 <h4>Generate the Appeal</h4>
-                <p>Writes the letter using the winning template, clinical evidence, and Propel criteria to build the argument.</p>
+                <p>Writes the letter citing physician notes first as primary evidence, then structured data as support. Uses the winning template and Propel criteria.</p>
             </div>
         </div>
 
@@ -342,37 +491,9 @@
             <div class="step-number">6</div>
             <div class="step-content">
                 <h4>Assess Strength</h4>
-                <p>Evaluates the letter and flags what evidence is strong vs. what might be missing.</p>
+                <p>Evaluates the letter and scores what evidence is strong vs. what might be missing.</p>
             </div>
         </div>
-    </section>
-
-    <section>
-        <h2>Evidence Hierarchy</h2>
-        <p>The system treats different types of evidence differently:</p>
-
-        <table>
-            <tr>
-                <th>Evidence Type</th>
-                <th>Role</th>
-                <th>Example</th>
-            </tr>
-            <tr>
-                <td><strong>Physician Notes</strong></td>
-                <td>Primary evidence - clinical judgment</td>
-                <td>"Patient developed septic shock requiring vasopressors"</td>
-            </tr>
-            <tr>
-                <td><strong>Structured Data</strong></td>
-                <td>Supporting evidence - objective measurements</td>
-                <td>MAP 58, Lactate 4.2, Norepinephrine started 14:30</td>
-            </tr>
-            <tr>
-                <td><strong>Diagnoses</strong></td>
-                <td>Documented conditions to quote</td>
-                <td>"Severe sepsis with septic shock due to E. coli"</td>
-            </tr>
-        </table>
     </section>
 
     <section>
@@ -384,8 +505,24 @@
             <ul>
                 <li>Verify the clinical facts are accurate</li>
                 <li>Check that the arguments make sense for this case</li>
-                <li>Review any flagged conflicts</li>
+                <li><strong>Review any flagged conflicts before sending</strong></li>
+                <li>Ensure the notes-first, data-second hierarchy makes sense</li>
                 <li>Edit as needed before sending</li>
+            </ul>
+        </div>
+
+        <div class="warning-box">
+            <h4>Special Attention: Conflicts Appendix</h4>
+            <p>
+                If the document has a <strong>"CONFLICTS DETECTED"</strong> section, stop and review these carefully.
+                These indicate places where the structured data doesn't back up what's in the physician notes.
+                You may need to:
+            </p>
+            <ul>
+                <li>Verify the timing of notes vs. data</li>
+                <li>Edit the letter to address the discrepancy</li>
+                <li>Query the physician for clarification</li>
+                <li>Decide whether to proceed with the appeal</li>
             </ul>
         </div>
     </section>
@@ -395,8 +532,9 @@
         <ul>
             <li><strong>Faster drafting</strong> - Research and initial draft done automatically</li>
             <li><strong>Consistent quality</strong> - Uses proven arguments from past winners</li>
-            <li><strong>Complete evidence</strong> - Pulls from 14 note types plus labs, vitals, meds</li>
-            <li><strong>Conflict detection</strong> - Flags discrepancies between notes and data</li>
+            <li><strong>Complete evidence</strong> - Pulls ALL notes from the encounter plus labs, vitals, meds</li>
+            <li><strong>Evidence hierarchy</strong> - Properly cites clinical judgment first, objective data second</li>
+            <li><strong>Conflict detection</strong> - Flags discrepancies between notes and data before you send</li>
             <li><strong>You stay in control</strong> - Every letter reviewed before sending</li>
         </ul>
     </section>
