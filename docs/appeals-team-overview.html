@@ -263,28 +263,59 @@
         <h2>The Flow</h2>
         <div class="flow-diagram">
    Denial Letter (PDF)
-         |
-         v
-   +------------------+
-   |   AI System      |
-   |                  |
-   |  Pulls together: |
-   |  - Past winners  |
-   |  - Clinical notes|
-   |  - Lab values    |
-   |  - Vitals        |
-   |  - Medications   |
-   |  - Diagnoses     |
-   +------------------+
-         |
-         v
-   Draft Appeal Letter (Word doc)
-         |
-         v
-   CDI Review & Approval
-         |
-         v
-   Final Letter to Payor</div>
+         │
+         ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │  STEP 1: Data Gathering                                 │
+   │                                                         │
+   │  ┌─────────────────┐    ┌─────────────────────────────┐ │
+   │  │  Parse Denial   │    │  Query Epic Clarity         │ │
+   │  │  - Account ID   │    │  - 14 clinical note types   │ │
+   │  │  - Payor        │    │  - Labs, vitals, meds       │ │
+   │  │  - DRG codes    │    │  - Diagnosis records        │ │
+   │  └─────────────────┘    └─────────────────────────────┘ │
+   └─────────────────────────────────────────────────────────┘
+         │
+         ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │  STEP 2: AI Analysis                                    │
+   │                                                         │
+   │  • Extract clinical data from notes (PRIMARY)           │
+   │  • Summarize structured data (SUPPORTING)               │
+   │  • Detect conflicts between notes and data              │
+   │  • Find best-matching past winning appeal               │
+   └─────────────────────────────────────────────────────────┘
+         │
+         ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │  STEP 3: Letter Generation                              │
+   │                                                         │
+   │  • Generate appeal using winning template               │
+   │  • Cite physician notes first, then supporting data     │
+   │  • Assess letter strength (1-10 score)                  │
+   └─────────────────────────────────────────────────────────┘
+         │
+         ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │  OUTPUT: Word Document                                  │
+   │                                                         │
+   │  1. Strength Assessment (internal review)               │
+   │  2. Conflicts Appendix (if any detected)                │
+   │  3. Draft Appeal Letter                                 │
+   └─────────────────────────────────────────────────────────┘
+         │
+         ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │  CDI REVIEW                                             │
+   │                                                         │
+   │  • Review conflicts (if flagged)                        │
+   │  • Verify clinical accuracy                             │
+   │  • Edit as needed                                       │
+   │  • Approve for sending                                  │
+   └─────────────────────────────────────────────────────────┘
+         │
+         ▼
+      Final Letter to Payor</div>
     </section>
 
     <section>
